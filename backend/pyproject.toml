@@ -1,0 +1,33 @@
+[project]
+name = "lhqs-ai-gateway-backend"
+version = "0.1.0"
+description = "FastAPI AI gateway with OpenAI-compatible chat and native provider proxy"
+requires-python = ">=3.12"
+dependencies = [
+    "asyncpg>=0.30.0",
+    "fastapi>=0.116.0",
+    "greenlet>=3.2.0",
+    "httpx>=0.28.0",
+    "pydantic>=2.11.0",
+    "pydantic-settings>=2.10.0",
+    "redis>=5.2.0",
+    "sqlalchemy>=2.0.41",
+    "uvicorn[standard]>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.21.0",
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.0.0",
+    "respx>=0.22.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

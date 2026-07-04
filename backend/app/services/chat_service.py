@@ -1,0 +1,257 @@
+import time
+from typing import Any
+
+from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.errors import ProviderCallError
+from app.core.security import AuthContext
+from app.db.models import Model, Provider
+from app.schemas.chat import ChatCompletionRequest, GatewayChatRequest, GatewayChatResponse
+from app.services.cache_service import CacheService
+from app.services.access_policy_service import AccessPolicyService
+from app.services.failover_service import FailoverService
+from app.services.provider_service import ProviderService
+from app.services.routing_service import RoutingService
+from app.services.usage_service import UsageService
+
+
+class ChatService:
+    def __init__(self, session: AsyncSession, cache: CacheService) -> None:
+        self.session = session
+        self.cache = cache
+        self.routing = RoutingService(session)
+        self.provider_service = ProviderService()
+        self.failover = FailoverService()
+        self.usage = UsageService(session)
+        self.access_policy = AccessPolicyService()
+
+    async def complete(
+        self, auth: AuthContext, request_id: str, payload: ChatCompletionRequest
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        route = await self.routing.resolve(payload.model)
+        self.access_policy.ensure_chat_allowed(auth, payload.model, route.provider, route.model)
+        body = payload.model_dump(exclude_none=True)
+        cache_key = None
+        request_hash = None
+        if route.rule.cache_enabled and not payload.stream:
+            request_hash = self.cache.build_request_hash(auth.client.id, payload.model, body)
+            cache_key = self.cache.build_cache_key(request_hash)
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                await self.usage.record(
+                    request_id=request_id,
+                    client_id=auth.client.id,
+                    model_alias=payload.model,
+                    provider_id=cached.get("provider_id"),
+                    model_id=cached.get("model_id"),
+                    stream=False,
+                    status="success",
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    call_mode="unified_chat",
+                    usage_status="parsed",
+                    raw_usage=cached.get("raw_usage"),
+                    prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                    completion_content=cached.get("completion_content"),
+                    cache_hit=True,
+                    cache_key=cache_key,
+                    final_provider_id=cached.get("provider_id"),
+                    final_model_id=cached.get("model_id"),
+                )
+                return cached["body"]
+
+        attempts: list[tuple[Model, Provider]] = [(route.model, route.provider)]
+        for fallback_id in route.rule.fallback_model_ids or []:
+            if len(attempts) >= max(route.rule.max_failover_attempts + 1, 1):
+                break
+            fallback_model, fallback_provider = await self.routing.resolve_model(int(fallback_id))
+            self.access_policy.ensure_chat_allowed(auth, payload.model, fallback_provider, fallback_model)
+            attempts.append((fallback_model, fallback_provider))
+
+        last_error: ProviderCallError | None = None
+        failure_reason = None
+        for attempt_index, (model, provider) in enumerate(attempts):
+            gw_request = GatewayChatRequest(
+                request_id=request_id,
+                model_alias=payload.model,
+                provider_model=model.name,
+                messages=payload.messages,
+                stream=False,
+                body=body,
+            )
+            try:
+                response = await self.provider_service.chat_completion(provider, model, gw_request)
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                failover_triggered = attempt_index > 0
+                await self.usage.record(
+                    request_id=request_id,
+                    client_id=auth.client.id,
+                    model_alias=payload.model,
+                    provider_id=provider.id,
+                    model_id=model.id,
+                    stream=False,
+                    status="success",
+                    prompt_tokens=response.prompt_tokens,
+                    completion_tokens=response.completion_tokens,
+                    total_tokens=response.total_tokens,
+                    latency_ms=latency_ms,
+                    call_mode="unified_chat",
+                    usage_status=response.usage_status,
+                    raw_usage=response.raw_usage,
+                    prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                    completion_content=response.body,
+                    cache_hit=False,
+                    cache_key=cache_key,
+                    failover_triggered=failover_triggered,
+                    failover_attempts=attempt_index,
+                    initial_provider_id=route.provider.id,
+                    initial_model_id=route.model.id,
+                    final_provider_id=provider.id,
+                    final_model_id=model.id,
+                    failure_reason=failure_reason,
+                )
+                if cache_key and request_hash:
+                    await self.cache.set_json(
+                        cache_key,
+                        {
+                            "body": response.body,
+                            "provider_id": provider.id,
+                            "model_id": model.id,
+                            "raw_usage": response.raw_usage,
+                            "completion_content": response.body,
+                        },
+                        route.rule.cache_ttl_seconds,
+                    )
+                return response.body
+            except ProviderCallError as exc:
+                last_error = exc
+                decision = self.failover.should_failover(exc, route.rule, attempt_index)
+                failure_reason = decision.reason or exc.error_type
+                await self.usage.record(
+                    request_id=request_id,
+                    client_id=auth.client.id,
+                    model_alias=payload.model,
+                    provider_id=provider.id,
+                    model_id=model.id,
+                    stream=False,
+                    status="failed",
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    error_code=exc.error_type,
+                    error_message=exc.message,
+                    call_mode="unified_chat",
+                    usage_status="failed",
+                    prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                    raw_response_body=exc.response_body,
+                    cache_hit=False,
+                    cache_key=cache_key,
+                    failover_triggered=decision.should_failover,
+                    failover_attempts=attempt_index,
+                    initial_provider_id=route.provider.id,
+                    initial_model_id=route.model.id,
+                    final_provider_id=provider.id,
+                    final_model_id=model.id,
+                    failure_reason=failure_reason,
+                )
+                if not decision.should_failover:
+                    break
+
+        if last_error and last_error.status_code:
+            raise HTTPException(status_code=last_error.status_code, detail=last_error.message)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=last_error.message if last_error else "Provider request failed",
+        )
+
+    async def complete_stream(
+        self, auth: AuthContext, request_id: str, payload: ChatCompletionRequest
+    ):
+        route = await self.routing.resolve(payload.model)
+        self.access_policy.ensure_chat_allowed(auth, payload.model, route.provider, route.model)
+        body = payload.model_dump(exclude_none=True)
+        body["stream"] = True
+        started = time.perf_counter()
+        first_token_ms: int | None = None
+        attempts: list[tuple[Model, Provider]] = [(route.model, route.provider)]
+        for fallback_id in route.rule.fallback_model_ids or []:
+            if len(attempts) >= max(route.rule.max_failover_attempts + 1, 1):
+                break
+            fallback_model, fallback_provider = await self.routing.resolve_model(int(fallback_id))
+            self.access_policy.ensure_chat_allowed(auth, payload.model, fallback_provider, fallback_model)
+            attempts.append((fallback_model, fallback_provider))
+        last_error: ProviderCallError | None = None
+        emitted = False
+        failure_reason = None
+        for attempt_index, (model, provider) in enumerate(attempts):
+            gw_request = GatewayChatRequest(
+                request_id=request_id,
+                model_alias=payload.model,
+                provider_model=model.name,
+                messages=payload.messages,
+                stream=True,
+                body=body,
+            )
+            try:
+                async for chunk in self.provider_service.stream_chat_completion(provider, model, gw_request):
+                    emitted = True
+                    if chunk.first_token and first_token_ms is None:
+                        first_token_ms = int((time.perf_counter() - started) * 1000)
+                    yield chunk.data
+                await self.usage.record(
+                    request_id=request_id,
+                    client_id=auth.client.id,
+                    model_alias=payload.model,
+                    provider_id=provider.id,
+                    model_id=model.id,
+                    stream=True,
+                    status="success",
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    first_token_latency_ms=first_token_ms,
+                    call_mode="unified_chat",
+                    usage_status="unknown",
+                    prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                    failover_triggered=attempt_index > 0,
+                    failover_attempts=attempt_index,
+                    initial_provider_id=route.provider.id,
+                    initial_model_id=route.model.id,
+                    final_provider_id=provider.id,
+                    final_model_id=model.id,
+                    failure_reason=failure_reason,
+                )
+                return
+            except ProviderCallError as exc:
+                last_error = exc
+                decision = self.failover.should_failover(exc, route.rule, attempt_index)
+                failure_reason = decision.reason or exc.error_type
+                await self.usage.record(
+                    request_id=request_id,
+                    client_id=auth.client.id,
+                    model_alias=payload.model,
+                    provider_id=provider.id,
+                    model_id=model.id,
+                    stream=True,
+                    status="failed",
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    first_token_latency_ms=first_token_ms,
+                    error_code=exc.error_type,
+                    error_message=exc.message,
+                    call_mode="unified_chat",
+                    usage_status="failed",
+                    raw_response_body=exc.response_body,
+                    prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                    failover_triggered=decision.should_failover and not emitted,
+                    failover_attempts=attempt_index,
+                    initial_provider_id=route.provider.id,
+                    initial_model_id=route.model.id,
+                    final_provider_id=provider.id,
+                    final_model_id=model.id,
+                    failure_reason=failure_reason,
+                )
+                if emitted or not decision.should_failover:
+                    raise
+                continue
+        if last_error:
+            raise last_error
