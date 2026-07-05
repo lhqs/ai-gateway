@@ -180,7 +180,7 @@ export function UsagePage({ headers, setNotice }: PageProps) {
       <Section
         title="Usage Logs"
         action={
-          <Button onClick={load} variant="light">
+          <Button onClick={() => load()} variant="light">
             <RefreshCw size={15} />
             Refresh
           </Button>

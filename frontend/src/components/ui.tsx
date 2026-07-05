@@ -91,7 +91,7 @@ export function Button({
   return (
     <button
       type={type}
-      onClick={onClick}
+      onClick={() => onClick?.()}
       disabled={disabled}
       title={title}
       className={`inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm ${
