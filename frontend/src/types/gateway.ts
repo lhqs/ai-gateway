@@ -7,6 +7,11 @@ export type Dashboard = {
   success_rate: number;
   total_tokens: number;
   avg_latency_ms: number;
+  error_count: number;
+  total_cost: number;
+  cache_hit_rate: number;
+  failover_count: number;
+  stream_count: number;
 };
 
 export type Client = {

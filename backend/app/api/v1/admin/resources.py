@@ -468,9 +468,21 @@ async def dashboard(session: AsyncSession = Depends(session_dep)):
     success = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.status == "success"))
     tokens = await session.scalar(select(func.coalesce(func.sum(UsageLog.total_tokens), 0)))
     avg_latency = await session.scalar(select(func.avg(UsageLog.latency_ms)))
+    errors = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.status != "success"))
+    total_cost = await session.scalar(select(func.coalesce(func.sum(UsageLog.total_cost), 0)))
+    cache_hits = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.cache_hit.is_(True)))
+    failovers = await session.scalar(
+        select(func.count()).select_from(UsageLog).where(UsageLog.failover_triggered.is_(True))
+    )
+    stream_calls = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.stream.is_(True)))
     return {
         "total_requests": total or 0,
         "success_rate": float((success or 0) / total) if total else 0,
         "total_tokens": int(tokens or 0),
         "avg_latency_ms": float(avg_latency or 0),
+        "error_count": int(errors or 0),
+        "total_cost": float(total_cost or 0),
+        "cache_hit_rate": float((cache_hits or 0) / total) if total else 0,
+        "failover_count": int(failovers or 0),
+        "stream_count": int(stream_calls or 0),
     }

@@ -30,6 +30,12 @@ export function DashboardPage({ headers, setNotice }: PageProps) {
         <Metric label="Tokens" value={dashboard?.total_tokens ?? 0} />
         <Metric label="Avg Latency" value={`${Math.round(dashboard?.avg_latency_ms ?? 0)} ms`} />
       </div>
+      <div className="grid grid-cols-4 gap-4">
+        <Metric label="Errors" value={dashboard?.error_count ?? 0} />
+        <Metric label="Est. Cost" value={`$${(dashboard?.total_cost ?? 0).toFixed(4)}`} />
+        <Metric label="Cache Hit Rate" value={`${Math.round((dashboard?.cache_hit_rate ?? 0) * 100)}%`} />
+        <Metric label="Failovers" value={dashboard?.failover_count ?? 0} />
+      </div>
       <Section
         title="Recent Calls"
         action={
