@@ -80,6 +80,7 @@ export type RouteRule = {
   model_alias_id: number;
   primary_model_id: number;
   fallback_model_ids: number[];
+  priority: number;
   failover_enabled: boolean;
   max_failover_attempts: number;
   cache_enabled: boolean;

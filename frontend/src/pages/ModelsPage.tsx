@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, DataTable, Field, Input, Modal, Pagination, Section, Select } from "../components/ui";
 import { api, apiWithMeta, parseCsv } from "../lib/api";
-import type { Alias, Model, PageProps, Provider } from "../types/gateway";
+import type { Alias, Model, PageProps, Provider, RouteRule } from "../types/gateway";
 
 const PAGE_SIZE = 8;
 
@@ -20,6 +20,7 @@ type ModelForm = {
 type AliasForm = {
   alias: string;
   description: string;
+  primary_model_id: string;
   status: string;
 };
 
@@ -38,8 +39,8 @@ function defaultModelForm(providerId = ""): ModelForm {
   };
 }
 
-function defaultAliasForm(): AliasForm {
-  return { alias: "default-chat", description: "", status: "active" };
+function defaultAliasForm(primaryModelId = ""): AliasForm {
+  return { alias: "default-chat", description: "", primary_model_id: primaryModelId, status: "active" };
 }
 
 function modelFormFromModel(model: Model): ModelForm {
@@ -53,10 +54,11 @@ function modelFormFromModel(model: Model): ModelForm {
   };
 }
 
-function aliasFormFromAlias(alias: Alias): AliasForm {
+function aliasFormFromAlias(alias: Alias, routeRule?: RouteRule): AliasForm {
   return {
     alias: alias.alias,
     description: alias.description || "",
+    primary_model_id: routeRule ? String(routeRule.primary_model_id) : "",
     status: alias.status
   };
 }
@@ -75,7 +77,9 @@ function modelPayload(form: ModelForm) {
 export function ModelsPage({ headers, setNotice }: PageProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [models, setModels] = useState<Model[]>([]);
+  const [modelOptions, setModelOptions] = useState<Model[]>([]);
   const [aliases, setAliases] = useState<Alias[]>([]);
+  const [routeRules, setRouteRules] = useState<RouteRule[]>([]);
   const [modelTotal, setModelTotal] = useState(0);
   const [aliasTotal, setAliasTotal] = useState(0);
   const [modelPage, setModelPage] = useState(1);
@@ -92,24 +96,64 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
     () => new Map(providers.map((provider) => [provider.id, provider.name])),
     [providers]
   );
+  const modelsById = useMemo(
+    () => new Map(modelOptions.map((model) => [model.id, model.display_name || model.name])),
+    [modelOptions]
+  );
+  const routeRulesByAliasId = useMemo(
+    () => {
+      const map = new Map<number, RouteRule>();
+      const sorted = [...routeRules].sort((left, right) => left.priority - right.priority || left.id - right.id);
+      for (const routeRule of sorted) {
+        if (!map.has(routeRule.model_alias_id)) {
+          map.set(routeRule.model_alias_id, routeRule);
+        }
+      }
+      return map;
+    },
+    [routeRules]
+  );
+  const activeRouteRulesByAliasId = useMemo(
+    () => {
+      const map = new Map<number, RouteRule>();
+      const sorted = routeRules
+        .filter((routeRule) => routeRule.status === "active")
+        .sort((left, right) => left.priority - right.priority || left.id - right.id);
+      for (const routeRule of sorted) {
+        if (!map.has(routeRule.model_alias_id)) {
+          map.set(routeRule.model_alias_id, routeRule);
+        }
+      }
+      return map;
+    },
+    [routeRules]
+  );
+  const activeModelOptions = useMemo(
+    () => modelOptions.filter((model) => model.status === "active"),
+    [modelOptions]
+  );
 
   async function load() {
     const modelOffset = (modelPage - 1) * PAGE_SIZE;
     const aliasOffset = (aliasPage - 1) * PAGE_SIZE;
-    const [providerData, modelData, aliasData] = await Promise.all([
+    const [providerData, modelData, aliasData, modelOptionData, routeRuleData] = await Promise.all([
       apiWithMeta<Provider[]>("/admin/providers?limit=1000&offset=0", { headers }, setNotice),
       apiWithMeta<Model[]>(`/admin/models?limit=${PAGE_SIZE}&offset=${modelOffset}`, { headers }, setNotice),
       apiWithMeta<Alias[]>(
         `/admin/model-aliases?limit=${PAGE_SIZE}&offset=${aliasOffset}`,
         { headers },
         setNotice
-      )
+      ),
+      apiWithMeta<Model[]>("/admin/models?limit=1000&offset=0", { headers }, setNotice),
+      apiWithMeta<RouteRule[]>("/admin/route-rules?limit=1000&offset=0", { headers }, setNotice)
     ]);
     setProviders(providerData.data);
     setModels(modelData.data);
+    setModelOptions(modelOptionData.data);
     setModelTotal(modelData.total);
     setAliases(aliasData.data);
     setAliasTotal(aliasData.total);
+    setRouteRules(routeRuleData.data);
   }
 
   useEffect(() => {
@@ -138,13 +182,13 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
 
   function openCreateAlias() {
     setEditingAliasId(null);
-    setAliasForm(defaultAliasForm());
+    setAliasForm(defaultAliasForm(activeModelOptions[0] ? String(activeModelOptions[0].id) : ""));
     setAliasModalMode("create");
   }
 
   function openEditAlias(alias: Alias) {
     setEditingAliasId(alias.id);
-    setAliasForm(aliasFormFromAlias(alias));
+    setAliasForm(aliasFormFromAlias(alias, routeRulesByAliasId.get(alias.id)));
     setAliasModalMode("edit");
   }
 
@@ -168,7 +212,7 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
   async function submitAlias(event: React.FormEvent) {
     event.preventDefault();
     const isEdit = aliasModalMode === "edit" && editingAliasId !== null;
-    await api<Alias>(
+    const alias = await api<Alias>(
       isEdit ? `/admin/model-aliases/${editingAliasId}` : "/admin/model-aliases",
       {
         method: isEdit ? "PATCH" : "POST",
@@ -181,8 +225,30 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
       },
       setNotice
     );
+
+    if (aliasForm.primary_model_id) {
+      const routeRule = isEdit ? routeRulesByAliasId.get(alias.id) : undefined;
+      await api<RouteRule>(
+        routeRule ? `/admin/route-rules/${routeRule.id}` : "/admin/route-rules",
+        {
+          method: routeRule ? "PATCH" : "POST",
+          headers,
+          body: JSON.stringify({
+            model_alias_id: alias.id,
+            primary_model_id: Number(aliasForm.primary_model_id),
+            status: "active",
+            failover_enabled: true,
+            max_failover_attempts: 2,
+            cache_enabled: false,
+            cache_ttl_seconds: 300
+          })
+        },
+        setNotice
+      );
+    }
+
     setAliasModalMode(null);
-    setNotice(isEdit ? "Alias updated" : "Alias created");
+    setNotice(isEdit ? "Alias route updated" : "Alias route created");
     await load();
   }
 
@@ -249,15 +315,16 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
         action={
           <Button onClick={openCreateAlias}>
             <Network size={15} />
-            New Alias
+            New Alias Route
           </Button>
         }
       >
         <DataTable
-          columns={["id", "alias", "description", "status", "actions"]}
+          columns={["id", "alias", "primary model", "description", "status", "actions"]}
           rows={aliases.map((alias) => [
             alias.id,
             alias.alias,
+            modelsById.get(activeRouteRulesByAliasId.get(alias.id)?.primary_model_id || 0) || "No active route",
             alias.description || "",
             <Badge tone={alias.status === "active" ? "good" : "bad"}>{alias.status}</Badge>,
             <div className="flex gap-2">
@@ -348,7 +415,7 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
 
       <Modal
         open={aliasModalMode !== null}
-        title={aliasModalMode === "edit" ? "Edit Alias" : "Create Alias"}
+        title={aliasModalMode === "edit" ? "Edit Alias Route" : "Create Alias Route"}
         onClose={() => setAliasModalMode(null)}
       >
         <form onSubmit={submitAlias} className="space-y-4">
@@ -370,6 +437,22 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
               </Select>
             </Field>
             <div className="md:col-span-2">
+              <Field label="Primary Model">
+                <Select
+                  value={aliasForm.primary_model_id}
+                  onChange={(event) => setAliasForm({ ...aliasForm, primary_model_id: event.target.value })}
+                  required
+                >
+                  <option value="">Select model</option>
+                  {activeModelOptions.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.display_name || model.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+            <div className="md:col-span-2">
               <Field label="Description">
                 <Input
                   value={aliasForm.description}
@@ -382,9 +465,9 @@ export function ModelsPage({ headers, setNotice }: PageProps) {
             <Button onClick={() => setAliasModalMode(null)} variant="light">
               Cancel
             </Button>
-            <Button type="submit">
+            <Button type="submit" disabled={!activeModelOptions.length}>
               {aliasModalMode === "edit" ? <Pencil size={15} /> : <Network size={15} />}
-              {aliasModalMode === "edit" ? "Save Alias" : "Create Alias"}
+              {aliasModalMode === "edit" ? "Save Alias Route" : "Create Alias Route"}
             </Button>
           </div>
         </form>
