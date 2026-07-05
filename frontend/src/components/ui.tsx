@@ -59,7 +59,7 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
       {...props}
-      className="h-9 w-full rounded-md border border-line bg-white px-3 text-sm outline-none focus:border-accent"
+      className={`h-9 w-full rounded-md border border-line bg-white px-3 text-sm outline-none focus:border-accent ${props.className || ""}`}
     />
   );
 }
@@ -224,7 +224,7 @@ export function DataTable({ columns, rows }: { columns: string[]; rows: React.Re
           {rows.map((row, index) => (
             <tr key={index} className="border-t border-line">
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="max-w-[360px] whitespace-normal break-words px-3 py-2 align-top">
+                <td key={cellIndex} className="max-w-[360px] whitespace-normal break-words px-3 py-2 align-middle">
                   {cell}
                 </td>
               ))}

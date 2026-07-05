@@ -1,7 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api } from "../lib/api";
+import { api, apiWithMeta } from "../lib/api";
 import { Badge, Button, DataTable, Metric, Section } from "../components/ui";
 import type { Dashboard, PageProps, UsageLog } from "../types/gateway";
 
@@ -12,10 +12,10 @@ export function DashboardPage({ headers, setNotice }: PageProps) {
   async function load() {
     const [dash, logs] = await Promise.all([
       api<Dashboard>("/admin/dashboard", { headers }, setNotice),
-      api<UsageLog[]>("/admin/usage-logs?limit=8", { headers }, setNotice)
+      apiWithMeta<UsageLog[]>("/admin/usage-logs?limit=8", { headers }, setNotice)
     ]);
     setDashboard(dash);
-    setUsage(logs);
+    setUsage(logs.data);
   }
 
   useEffect(() => {

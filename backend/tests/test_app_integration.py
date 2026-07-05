@@ -303,7 +303,7 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
         headers={"Authorization": f"Bearer {key_payload['key']}"},
         json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
     )
-    logs = (await client.get("/admin/usage-logs")).json()
+    logs = (await client.get("/admin/usage-logs")).json()["items"]
 
     assert response.status_code == 200
     assert response.json()["id"] == "chatcmpl-test"
@@ -341,7 +341,7 @@ async def test_native_proxy_access_denied_through_app(app_client):
         "/proxy/gemini/v1beta/models/gemini",
         headers={"Authorization": f"Bearer {key_payload['key']}"},
     )
-    logs = (await client.get("/admin/usage-logs")).json()
+    logs = (await client.get("/admin/usage-logs")).json()["items"]
 
     assert response.status_code == 403
     assert logs[0]["call_mode"] == "native_proxy"
@@ -410,7 +410,7 @@ async def test_chat_can_call_active_provider_model_without_alias(app_client, mon
         headers={"Authorization": f"Bearer {key_payload['key']}"},
         json={"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}]},
     )
-    logs = (await client.get("/admin/usage-logs")).json()
+    logs = (await client.get("/admin/usage-logs")).json()["items"]
 
     assert response.status_code == 200
     assert response.json()["id"] == "chatcmpl-direct-model"

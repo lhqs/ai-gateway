@@ -41,3 +41,10 @@ class UsageLogRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class UsageLogPage(BaseModel):
+    items: list[UsageLogRead]
+    total: int
+    limit: int
+    offset: int

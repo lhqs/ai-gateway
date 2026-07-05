@@ -41,7 +41,7 @@ from app.schemas.admin import (
     RouteRuleRead,
     RouteRuleWrite,
 )
-from app.schemas.usage import UsageLogRead
+from app.schemas.usage import UsageLogPage
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -301,7 +301,7 @@ async def delete_route_rule(item_id: int, session: AsyncSession = Depends(sessio
     await repo.delete(item)
 
 
-@router.get("/usage-logs", response_model=list[UsageLogRead])
+@router.get("/usage-logs", response_model=UsageLogPage)
 async def list_usage_logs(
     limit: int = 100,
     offset: int = 0,
@@ -315,20 +315,23 @@ async def list_usage_logs(
     failover_triggered: bool | None = None,
     session: AsyncSession = Depends(session_dep),
 ):
-    return await UsageLogRepository(session).list_recent(
-        limit=limit,
-        offset=offset,
-        filters={
-            "call_mode": call_mode,
-            "client_id": client_id,
-            "model_alias": model_alias,
-            "provider_id": provider_id,
-            "native_path": native_path,
-            "status": status_filter,
-            "cache_hit": cache_hit,
-            "failover_triggered": failover_triggered,
-        },
-    )
+    filters = {
+        "call_mode": call_mode,
+        "client_id": client_id,
+        "model_alias": model_alias,
+        "provider_id": provider_id,
+        "native_path": native_path,
+        "status": status_filter,
+        "cache_hit": cache_hit,
+        "failover_triggered": failover_triggered,
+    }
+    repo = UsageLogRepository(session)
+    return {
+        "items": await repo.list_recent(limit=limit, offset=offset, filters=filters),
+        "total": await repo.count_recent(filters=filters),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/dashboard")

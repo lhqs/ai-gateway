@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
 from app.db.models import UsageLog
 from app.repositories.base import Repository
@@ -15,12 +15,7 @@ class UsageLogRepository(Repository[UsageLog]):
         await self.session.flush()
         return item
 
-    async def list_recent(
-        self,
-        limit: int = 100,
-        offset: int = 0,
-        filters: dict[str, Any] | None = None,
-    ) -> list[UsageLog]:
+    def _filtered_stmt(self, filters: dict[str, Any] | None = None):
         stmt = select(UsageLog)
         filters = filters or {}
         for field in (
@@ -39,5 +34,18 @@ class UsageLogRepository(Repository[UsageLog]):
         native_path = filters.get("native_path")
         if native_path:
             stmt = stmt.where(UsageLog.native_path.ilike(f"%{native_path}%"))
+        return stmt
+
+    async def list_recent(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        filters: dict[str, Any] | None = None,
+    ) -> list[UsageLog]:
+        stmt = self._filtered_stmt(filters)
         result = await self.session.scalars(stmt.order_by(desc(UsageLog.created_at)).limit(limit).offset(offset))
         return list(result)
+
+    async def count_recent(self, filters: dict[str, Any] | None = None) -> int:
+        filtered = self._filtered_stmt(filters).subquery()
+        return await self.session.scalar(select(func.count()).select_from(filtered)) or 0
