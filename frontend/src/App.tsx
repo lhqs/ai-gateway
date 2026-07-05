@@ -8,11 +8,12 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { RoutesPage } from "./pages/RoutesPage";
 import { UsagePage } from "./pages/UsagePage";
 import { LoginPage } from "./pages/LoginPage";
-import type { Tab } from "./types/gateway";
 import { api, apiBase } from "./lib/api";
+import { isKnownPath, tabFromPath, tabPaths } from "./lib/routes";
+import type { Tab } from "./types/gateway";
 
 export function App() {
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [tab, setTab] = useState<Tab>(() => tabFromPath(window.location.pathname));
   const [adminToken, setAdminToken] = useState(localStorage.getItem("adminToken") || "");
   const [authenticated, setAuthenticated] = useState(Boolean(localStorage.getItem("adminToken")));
   const [notice, setNotice] = useState("");
@@ -20,6 +21,23 @@ export function App() {
     () => ({ Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" }),
     [adminToken]
   );
+
+  useEffect(() => {
+    function syncTabWithLocation() {
+      setTab(tabFromPath(window.location.pathname));
+    }
+
+    syncTabWithLocation();
+    window.addEventListener("popstate", syncTabWithLocation);
+    return () => window.removeEventListener("popstate", syncTabWithLocation);
+  }, []);
+
+  useEffect(() => {
+    if (!isKnownPath(window.location.pathname) || window.location.pathname === "/") {
+      window.history.replaceState(null, "", tabPaths.dashboard);
+      setTab("dashboard");
+    }
+  }, []);
 
   useEffect(() => {
     if (authenticated && adminToken) {
@@ -38,6 +56,13 @@ export function App() {
     setNotice(`Connected to ${apiBase()}`);
   }
 
+  function navigate(path: string) {
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, "", path);
+    }
+    setTab(tabFromPath(path));
+  }
+
   function logout() {
     localStorage.removeItem("adminToken");
     setAdminToken("");
@@ -52,7 +77,7 @@ export function App() {
   return (
     <AppLayout
       tab={tab}
-      setTab={setTab}
+      onNavigate={navigate}
       adminToken={adminToken}
       setAdminToken={setAdminToken}
       notice={notice}

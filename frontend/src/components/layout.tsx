@@ -1,20 +1,21 @@
 import { Activity, Database, ListFilter, Route, ServerCog, ShieldCheck, Users } from "lucide-react";
 import type React from "react";
 
+import { tabPaths } from "../lib/routes";
 import type { Tab } from "../types/gateway";
 
-export const nav: Array<{ key: Tab; label: string; icon: React.ComponentType<{ size?: number }> }> = [
-  { key: "dashboard", label: "Dashboard", icon: Activity },
-  { key: "clients", label: "Clients & Keys", icon: Users },
-  { key: "providers", label: "Providers", icon: ServerCog },
-  { key: "models", label: "Models & Aliases", icon: Database },
-  { key: "routes", label: "Routes", icon: Route },
-  { key: "usage", label: "Usage Logs", icon: ListFilter }
+export const nav: Array<{ key: Tab; label: string; path: string; icon: React.ComponentType<{ size?: number }> }> = [
+  { key: "dashboard", label: "Dashboard", path: tabPaths.dashboard, icon: Activity },
+  { key: "clients", label: "Clients & Keys", path: tabPaths.clients, icon: Users },
+  { key: "providers", label: "Providers", path: tabPaths.providers, icon: ServerCog },
+  { key: "models", label: "Models & Aliases", path: tabPaths.models, icon: Database },
+  { key: "routes", label: "Routes", path: tabPaths.routes, icon: Route },
+  { key: "usage", label: "Usage Logs", path: tabPaths.usage, icon: ListFilter }
 ];
 
 export function AppLayout({
   tab,
-  setTab,
+  onNavigate,
   adminToken,
   setAdminToken,
   notice,
@@ -22,7 +23,7 @@ export function AppLayout({
   children
 }: {
   tab: Tab;
-  setTab: (tab: Tab) => void;
+  onNavigate: (path: string) => void;
   adminToken: string;
   setAdminToken: (value: string) => void;
   notice: string;
@@ -43,16 +44,24 @@ export function AppLayout({
           {nav.map((item) => {
             const Icon = item.icon;
             return (
-              <button
+              <a
                 key={item.key}
-                onClick={() => setTab(item.key)}
+                href={item.path}
+                onClick={(event) => {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+                    return;
+                  }
+                  event.preventDefault();
+                  onNavigate(item.path);
+                }}
                 className={`flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm ${
                   tab === item.key ? "bg-ink text-white" : "text-slate-700 hover:bg-panel"
                 }`}
+                aria-current={tab === item.key ? "page" : undefined}
               >
                 <Icon size={17} />
                 {item.label}
-              </button>
+              </a>
             );
           })}
         </nav>
