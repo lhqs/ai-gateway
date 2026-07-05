@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LHQS AI Gateway">
+  <rect width="64" height="64" rx="14" fill="#0f766e"/>
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.4">
+    <path d="M14 22 H50"/>
+    <path d="M32 22 V46"/>
+    <path d="M20 46 H44"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="14" cy="22" r="3.6"/>
+    <circle cx="32" cy="22" r="3.6"/>
+    <circle cx="50" cy="22" r="3.6"/>
+    <circle cx="32" cy="46" r="4.2"/>
+  </g>
+</svg>

@@ -78,8 +78,6 @@ export function App() {
     <AppLayout
       tab={tab}
       onNavigate={navigate}
-      adminToken={adminToken}
-      setAdminToken={setAdminToken}
       notice={notice}
       onLogout={logout}
     >
