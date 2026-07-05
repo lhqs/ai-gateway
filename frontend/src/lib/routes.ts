@@ -6,6 +6,7 @@ export const tabPaths: Record<Tab, string> = {
   clients: "/clients",
   providers: "/providers",
   models: "/models",
+  pricing: "/pricing",
   routes: "/routes",
   usage: "/usage"
 };

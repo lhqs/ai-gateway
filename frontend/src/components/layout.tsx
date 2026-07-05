@@ -1,4 +1,4 @@
-import { Activity, Bot, Database, ListFilter, LogOut, Route, ServerCog, Users } from "lucide-react";
+import { Activity, Bot, Database, DollarSign, ListFilter, LogOut, Route, ServerCog, Users } from "lucide-react";
 import type React from "react";
 
 import { tabPaths } from "../lib/routes";
@@ -10,6 +10,7 @@ export const nav: Array<{ key: Tab; label: string; path: string; icon: React.Com
   { key: "clients", label: "Clients & Keys", path: tabPaths.clients, icon: Users },
   { key: "providers", label: "Providers", path: tabPaths.providers, icon: ServerCog },
   { key: "models", label: "Models & Aliases", path: tabPaths.models, icon: Database },
+  { key: "pricing", label: "Pricing", path: tabPaths.pricing, icon: DollarSign },
   { key: "routes", label: "Routes", path: tabPaths.routes, icon: Route },
   { key: "usage", label: "Usage Logs", path: tabPaths.usage, icon: ListFilter }
 ];

@@ -1,4 +1,4 @@
-export type Tab = "dashboard" | "workbench" | "clients" | "providers" | "models" | "routes" | "usage";
+export type Tab = "dashboard" | "workbench" | "clients" | "providers" | "models" | "pricing" | "routes" | "usage";
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -68,6 +68,25 @@ export type Model = {
   status: string;
 };
 
+export type ModelPriceConfig = {
+  id: number;
+  provider_id: number;
+  model_id: number;
+  model_name: string;
+  currency_code: string;
+  unit_type: string;
+  unit_quantity: number;
+  input_unit_price: string | null;
+  cached_input_unit_price: string | null;
+  output_unit_price: string | null;
+  reasoning_output_unit_price: string | null;
+  request_unit_price: string | null;
+  config: Record<string, JsonValue>;
+  status: string;
+  effective_from: string;
+  effective_to: string | null;
+};
+
 export type Alias = {
   id: number;
   alias: string;
@@ -103,6 +122,20 @@ export type UsageLog = {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cached_input_tokens: number;
+  billable_input_tokens: number;
+  billable_output_tokens: number;
+  estimated_cost: string | number | null;
+  cost_currency: string | null;
+  cost_unit_type: string | null;
+  cost_unit_quantity: number | null;
+  input_cost: string | number | null;
+  cached_input_cost: string | number | null;
+  output_cost: string | number | null;
+  total_cost: string | number | null;
+  pricing_config_id: number | null;
+  pricing_status: string;
+  cost_breakdown: unknown | null;
   latency_ms: number | null;
   cache_hit: boolean;
   failover_triggered: boolean;
@@ -130,6 +163,10 @@ export type WorkbenchChatTestMeta = {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cached_input_tokens: number;
+  total_cost: string | number | null;
+  cost_currency: string | null;
+  pricing_status: string | null;
   cache_hit: boolean;
   failover_triggered: boolean;
   failover_attempts: number;

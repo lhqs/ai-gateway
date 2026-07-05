@@ -76,6 +76,7 @@ class OpenAICompatibleAdapter:
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
             raw_usage=usage.raw_usage,
             usage_status=usage.usage_status,
         )
@@ -141,6 +142,7 @@ class OpenAICompatibleAdapter:
                     "prompt_tokens": usage.prompt_tokens,
                     "completion_tokens": usage.completion_tokens,
                     "total_tokens": usage.total_tokens,
+                    "cached_input_tokens": usage.cached_input_tokens,
                     "raw_usage": usage.raw_usage,
                     "usage_status": usage.usage_status,
                 }

@@ -13,10 +13,17 @@ class GeminiUsageParser:
         prompt = int(usage.get("promptTokenCount") or 0)
         completion = int(usage.get("candidatesTokenCount") or 0)
         total = int(usage.get("totalTokenCount") or prompt + completion)
+        cached_input = int(
+            usage.get("cachedContentTokenCount")
+            or usage.get("cacheTokensCount")
+            or usage.get("cachedTokenCount")
+            or 0
+        )
         return NativeUsageResult(
             prompt_tokens=prompt,
             completion_tokens=completion,
             total_tokens=total,
+            cached_input_tokens=cached_input,
             raw_usage=usage,
             usage_status="parsed",
         )

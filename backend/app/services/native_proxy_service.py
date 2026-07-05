@@ -48,6 +48,15 @@ class NativeProxyService:
         self.rate_limiter = RateLimiter(redis)
         self.access_policy = AccessPolicyService()
 
+    def _cost_currency(self, auth: AuthContext) -> str:
+        api_key_currency = (auth.api_key.access_config or {}).get("cost_currency")
+        client_currency = (auth.client.access_config or {}).get("cost_currency")
+        return str(api_key_currency or client_currency or self.settings.default_cost_currency).upper()
+
+    async def _record_usage(self, auth: AuthContext, **data: Any) -> None:
+        data.setdefault("cost_currency", self._cost_currency(auth))
+        await self.usage.record(**data)
+
     async def _build_request(
         self,
         request_id: str,
@@ -132,7 +141,8 @@ class NativeProxyService:
                     auth, path_target.model_alias, provider, path_target.model
                 )
         except HTTPException as exc:
-            await self.usage.record(
+            await self._record_usage(
+                auth,
                 request_id=request_id,
                 client_id=auth.client.id,
                 model_alias=path_target.model_alias,
@@ -161,7 +171,8 @@ class NativeProxyService:
             response = await adapter.forward(provider, native_request)
             content_type = response.headers.get("content-type")
             raw_response_body = self._json_or_text(response.body, content_type)
-            await self.usage.record(
+            await self._record_usage(
+                auth,
                 request_id=request_id,
                 client_id=auth.client.id,
                 model_alias=path_target.model_alias,
@@ -172,6 +183,7 @@ class NativeProxyService:
                 prompt_tokens=response.usage.prompt_tokens,
                 completion_tokens=response.usage.completion_tokens,
                 total_tokens=response.usage.total_tokens,
+                cached_input_tokens=response.usage.cached_input_tokens,
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 call_mode="native_proxy",
                 native_method=method,
@@ -193,7 +205,8 @@ class NativeProxyService:
                 headers={k: v for k, v in response.headers.items() if k.lower() != "content-type"},
             )
         except ProviderCallError as exc:
-            await self.usage.record(
+            await self._record_usage(
+                auth,
                 request_id=request_id,
                 client_id=auth.client.id,
                 model_alias=path_target.model_alias,
@@ -250,7 +263,8 @@ class NativeProxyService:
                     auth, path_target.model_alias, provider, path_target.model
                 )
         except HTTPException as exc:
-            await self.usage.record(
+            await self._record_usage(
+                auth,
                 request_id=request_id,
                 client_id=auth.client.id,
                 model_alias=path_target.model_alias,
@@ -299,7 +313,8 @@ class NativeProxyService:
                         if len("".join(chunks)) < 20000:
                             chunks.append(data.decode("utf-8", errors="replace"))
                         yield data
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=path_target.model_alias,
@@ -310,6 +325,7 @@ class NativeProxyService:
                     prompt_tokens=usage.prompt_tokens if usage else 0,
                     completion_tokens=usage.completion_tokens if usage else 0,
                     total_tokens=usage.total_tokens if usage else 0,
+                    cached_input_tokens=usage.cached_input_tokens if usage else 0,
                     latency_ms=int((time.perf_counter() - started) * 1000),
                     call_mode="native_proxy",
                     native_method=method,
@@ -324,7 +340,8 @@ class NativeProxyService:
                     raw_response_body="".join(chunks),
                 )
             except ProviderCallError as exc:
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=path_target.model_alias,
@@ -344,7 +361,8 @@ class NativeProxyService:
                 )
                 raise
             except TimeoutError:
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=path_target.model_alias,

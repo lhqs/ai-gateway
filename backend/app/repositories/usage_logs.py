@@ -25,6 +25,8 @@ class UsageLogRepository(Repository[UsageLog]):
             "provider_id",
             "status",
             "usage_status",
+            "pricing_status",
+            "cost_currency",
             "cache_hit",
             "failover_triggered",
         ):

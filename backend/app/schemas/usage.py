@@ -16,6 +16,20 @@ class UsageLogRead(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    cached_input_tokens: int
+    billable_input_tokens: int
+    billable_output_tokens: int
+    estimated_cost: Any | None = None
+    cost_currency: str | None
+    cost_unit_type: str | None
+    cost_unit_quantity: int | None
+    input_cost: Any | None
+    cached_input_cost: Any | None
+    output_cost: Any | None
+    total_cost: Any | None
+    pricing_config_id: int | None
+    pricing_status: str
+    cost_breakdown: dict[str, Any] | None
     latency_ms: int | None
     error_code: str | None
     error_message: str | None

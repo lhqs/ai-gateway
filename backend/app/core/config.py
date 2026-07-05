@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     native_stream_max_seconds: int = 300
     default_timeout_seconds: float = 60.0
     default_rate_limit_per_minute: int = 120
+    default_cost_currency: str = "USD"
     cache_namespace: str = "ai-gateway"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
 

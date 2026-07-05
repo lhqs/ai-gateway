@@ -12,6 +12,7 @@ from app.repositories.api_keys import ApiKeyRepository
 from app.repositories.base import Repository
 from app.repositories.clients import ClientRepository
 from app.repositories.models import ModelRepository
+from app.repositories.model_price_configs import ModelPriceConfigRepository
 from app.repositories.providers import ProviderRepository
 from app.repositories.route_rules import RouteRuleRepository
 from app.repositories.usage_logs import UsageLogRepository
@@ -24,10 +25,14 @@ from app.schemas.admin import (
     ClientPage,
     ClientPatch,
     ClientRead,
-    ModelAliasRead,
     ModelAliasPage,
     ModelAliasPatch,
+    ModelAliasRead,
     ModelAliasWrite,
+    ModelPriceConfigPage,
+    ModelPriceConfigPatch,
+    ModelPriceConfigRead,
+    ModelPriceConfigWrite,
     ModelPage,
     ModelPatch,
     ModelRead,
@@ -52,6 +57,8 @@ def _usage_filters(
     native_path: str | None = None,
     status_filter: str | None = None,
     usage_status: str | None = None,
+    pricing_status: str | None = None,
+    cost_currency: str | None = None,
     cache_hit: bool | None = None,
     failover_triggered: bool | None = None,
 ) -> dict[str, Any]:
@@ -60,6 +67,8 @@ def _usage_filters(
         "native_path": native_path,
         "status": status_filter,
         "usage_status": usage_status,
+        "pricing_status": pricing_status,
+        "cost_currency": cost_currency.upper() if cost_currency else None,
         "cache_hit": cache_hit,
         "failover_triggered": failover_triggered,
     }
@@ -75,6 +84,32 @@ async def _patch(repo: Repository, item_id: int, data: dict[str, Any]):
     await repo.session.flush()
     await repo.session.refresh(item)
     return item
+
+
+async def _ensure_price_model_provider(
+    session: AsyncSession, provider_id: int, model_id: int
+) -> Model:
+    provider = await ProviderRepository(session).get(provider_id)
+    model = await ModelRepository(session).get(model_id)
+    if not provider or not model or model.provider_id != provider.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Price config provider_id and model_id must reference the same model provider",
+        )
+    return model
+
+
+def _normalize_price_payload(data: dict[str, Any], model: Model | None = None) -> dict[str, Any]:
+    if data.get("currency_code"):
+        data["currency_code"] = str(data["currency_code"]).upper()
+    if data.get("currency_code") and data["currency_code"] not in {"USD", "CNY"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="currency_code must be USD or CNY",
+        )
+    if model and not data.get("model_name"):
+        data["model_name"] = model.name
+    return data
 
 
 @router.get("/clients", response_model=ClientPage)
@@ -248,6 +283,64 @@ async def delete_model(item_id: int, session: AsyncSession = Depends(session_dep
     await repo.delete(item)
 
 
+@router.get("/model-price-configs", response_model=ModelPriceConfigPage)
+async def list_model_price_configs(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    model_id: int | None = None,
+    currency_code: str | None = None,
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = ModelPriceConfigRepository(session)
+    return {
+        "items": await repo.list_filtered(
+            limit=limit, offset=offset, model_id=model_id, currency_code=currency_code
+        ),
+        "total": await repo.count_filtered(model_id=model_id, currency_code=currency_code),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.post("/model-price-configs", response_model=ModelPriceConfigRead)
+async def create_model_price_config(
+    payload: ModelPriceConfigWrite, session: AsyncSession = Depends(session_dep)
+):
+    data = payload.model_dump(exclude_none=True)
+    model = await _ensure_price_model_provider(session, payload.provider_id, payload.model_id)
+    data = _normalize_price_payload(data, model)
+    return await ModelPriceConfigRepository(session).create(data)
+
+
+@router.patch("/model-price-configs/{item_id}", response_model=ModelPriceConfigRead)
+async def update_model_price_config(
+    item_id: int, payload: ModelPriceConfigPatch, session: AsyncSession = Depends(session_dep)
+):
+    repo = ModelPriceConfigRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    data = payload.model_dump(exclude_unset=True)
+    provider_id = int(data.get("provider_id") or item.provider_id)
+    model_id = int(data.get("model_id") or item.model_id)
+    model = await _ensure_price_model_provider(session, provider_id, model_id)
+    data = _normalize_price_payload(data, model)
+    for key, value in data.items():
+        setattr(item, key, value)
+    await session.flush()
+    await session.refresh(item)
+    return item
+
+
+@router.delete("/model-price-configs/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_model_price_config(item_id: int, session: AsyncSession = Depends(session_dep)):
+    repo = ModelPriceConfigRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    await repo.delete(item)
+
+
 class ModelAliasRepository(Repository[ModelAlias]):
     model = ModelAlias
 
@@ -329,6 +422,8 @@ async def list_usage_logs(
     native_path: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     usage_status: str | None = None,
+    pricing_status: str | None = None,
+    cost_currency: str | None = None,
     cache_hit: bool | None = None,
     failover_triggered: bool | None = None,
     session: AsyncSession = Depends(session_dep),
@@ -338,6 +433,8 @@ async def list_usage_logs(
         native_path=native_path,
         status_filter=status_filter,
         usage_status=usage_status,
+        pricing_status=pricing_status,
+        cost_currency=cost_currency,
         cache_hit=cache_hit,
         failover_triggered=failover_triggered,
     )

@@ -4,6 +4,7 @@ import { AppLayout } from "./components/layout";
 import { ClientsPage } from "./pages/ClientsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ModelsPage } from "./pages/ModelsPage";
+import { PricingPage } from "./pages/PricingPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
 import { RoutesPage } from "./pages/RoutesPage";
 import { UsagePage } from "./pages/UsagePage";
@@ -87,6 +88,7 @@ export function App() {
       {tab === "clients" && <ClientsPage headers={headers} setNotice={setNotice} />}
       {tab === "providers" && <ProvidersPage headers={headers} setNotice={setNotice} />}
       {tab === "models" && <ModelsPage headers={headers} setNotice={setNotice} />}
+      {tab === "pricing" && <PricingPage headers={headers} setNotice={setNotice} />}
       {tab === "routes" && <RoutesPage headers={headers} setNotice={setNotice} />}
       {tab === "usage" && <UsagePage headers={headers} setNotice={setNotice} />}
     </AppLayout>

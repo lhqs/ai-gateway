@@ -17,6 +17,7 @@ class NativeUsageResult(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_input_tokens: int = 0
     raw_usage: dict[str, Any] | None = None
     usage_status: Literal["parsed", "estimated", "unknown", "failed"] = "unknown"
 

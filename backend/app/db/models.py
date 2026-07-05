@@ -90,6 +90,29 @@ class Model(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
 
 
+class ModelPriceConfig(Base, TimestampMixin):
+    __tablename__ = "model_price_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    model_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    currency_code: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    unit_type: Mapped[str] = mapped_column(String(32), nullable=False, default="tokens")
+    unit_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1_000_000)
+    input_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    cached_input_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    output_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    reasoning_output_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    request_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    config: Mapped[dict[str, Any]] = mapped_column(JsonType, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class ModelAlias(Base, TimestampMixin):
     __tablename__ = "model_aliases"
 
@@ -133,9 +156,24 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cached_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    billable_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    billable_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     first_token_latency_ms: Mapped[int | None] = mapped_column(Integer)
     estimated_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    cost_currency: Mapped[str | None] = mapped_column(String(16), index=True)
+    cost_unit_type: Mapped[str | None] = mapped_column(String(32))
+    cost_unit_quantity: Mapped[int | None] = mapped_column(Integer)
+    input_cost: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    cached_input_cost: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    output_cost: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    total_cost: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    pricing_config_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    pricing_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_calculated", index=True
+    )
+    cost_breakdown: Mapped[dict[str, Any] | None] = mapped_column(JsonType)
     error_code: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
     call_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="unified_chat")

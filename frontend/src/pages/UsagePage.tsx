@@ -12,6 +12,8 @@ type UsageFilter = {
   status: string;
   native_path: string;
   usage_status: string;
+  pricing_status: string;
+  cost_currency: string;
   cache_hit: string;
   failover_triggered: string;
 };
@@ -21,6 +23,8 @@ const defaultFilter: UsageFilter = {
   status: "",
   native_path: "",
   usage_status: "",
+  pricing_status: "",
+  cost_currency: "",
   cache_hit: "",
   failover_triggered: ""
 };
@@ -33,6 +37,13 @@ function formatLogTime(value: string) {
     minute: "2-digit",
     second: "2-digit"
   }).format(new Date(value));
+}
+
+function formatCost(row: UsageLog) {
+  if (row.total_cost === null || !row.cost_currency) {
+    return "";
+  }
+  return `${row.cost_currency} ${row.total_cost}`;
 }
 
 export function UsagePage({ headers, setNotice }: PageProps) {
@@ -93,7 +104,7 @@ export function UsagePage({ headers, setNotice }: PageProps) {
     <div className="space-y-5">
       <section className="rounded-md border border-line bg-white px-4 py-3">
         <div className="overflow-x-auto">
-          <div className="flex min-w-[1180px] items-center gap-3">
+          <div className="flex min-w-[1440px] items-center gap-3">
             <label className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-600">Mode</span>
               <Select
@@ -139,6 +150,33 @@ export function UsagePage({ headers, setNotice }: PageProps) {
                 onChange={(event) => setFilter({ ...filter, native_path: event.target.value })}
                 className="w-64"
               />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="whitespace-nowrap text-xs font-medium text-slate-600">Pricing</span>
+              <Select
+                value={filter.pricing_status}
+                onChange={(event) => setFilter({ ...filter, pricing_status: event.target.value })}
+                className="w-44"
+              >
+                <option value="">Any</option>
+                <option value="calculated">calculated</option>
+                <option value="missing_price_config">missing_price_config</option>
+                <option value="usage_unknown">usage_unknown</option>
+                <option value="not_billable">not_billable</option>
+                <option value="not_calculated">not_calculated</option>
+              </Select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="whitespace-nowrap text-xs font-medium text-slate-600">Currency</span>
+              <Select
+                value={filter.cost_currency}
+                onChange={(event) => setFilter({ ...filter, cost_currency: event.target.value })}
+                className="w-24"
+              >
+                <option value="">Any</option>
+                <option value="USD">USD</option>
+                <option value="CNY">CNY</option>
+              </Select>
             </label>
             <label className="flex items-center gap-2">
               <span className="whitespace-nowrap text-xs font-medium text-slate-600">Cache Hit</span>
@@ -187,10 +225,10 @@ export function UsagePage({ headers, setNotice }: PageProps) {
         }
       >
         <div className="max-w-full overflow-auto">
-          <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-sm">
+          <table className="w-full min-w-[1220px] table-fixed border-collapse text-left text-sm">
             <thead className="bg-panel text-slate-600">
               <tr>
-                {["Time", "Request", "Mode", "Target", "Status", "Usage", "Tokens", "Latency", "Cache", "Failover", ""].map(
+                {["Time", "Request", "Mode", "Target", "Status", "Usage", "Tokens", "Cost", "Pricing", "Latency", "Cache", "Failover", ""].map(
                   (header) => (
                     <th key={header} className="px-3 py-2 font-medium">
                       {header}
@@ -202,7 +240,7 @@ export function UsagePage({ headers, setNotice }: PageProps) {
             <tbody>
               {usage.length === 0 && (
                 <tr className="border-t border-line">
-                  <td className="px-3 py-5 text-slate-500" colSpan={11}>
+                  <td className="px-3 py-5 text-slate-500" colSpan={13}>
                     No data
                   </td>
                 </tr>
@@ -219,6 +257,8 @@ export function UsagePage({ headers, setNotice }: PageProps) {
                     </td>
                     <td className="px-3 py-2 align-middle">{row.usage_status}</td>
                     <td className="px-3 py-2 align-middle">{row.total_tokens}</td>
+                    <td className="px-3 py-2 align-middle">{formatCost(row)}</td>
+                    <td className="break-words px-3 py-2 align-middle">{row.pricing_status}</td>
                     <td className="px-3 py-2 align-middle">{row.latency_ms ?? 0} ms</td>
                     <td className="px-3 py-2 align-middle">{row.cache_hit ? "yes" : "no"}</td>
                     <td className="px-3 py-2 align-middle">{row.failover_triggered ? `${row.failover_attempts}` : "no"}</td>
@@ -230,7 +270,7 @@ export function UsagePage({ headers, setNotice }: PageProps) {
                   </tr>
                   {openId === row.id && (
                     <tr className="border-t border-line bg-panel">
-                      <td colSpan={11} className="max-w-0 p-3">
+                      <td colSpan={13} className="max-w-0 p-3">
                         <pre className="max-h-[420px] max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-white p-3 text-xs leading-5">
                           {JSON.stringify(row, null, 2)}
                         </pre>

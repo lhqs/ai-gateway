@@ -317,6 +317,22 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
             json={"provider_id": provider["id"], "name": "gpt-test", "capabilities": ["chat"], "status": "active"},
         )
     ).json()
+    price = (
+        await client.post(
+            "/admin/model-price-configs",
+            json={
+                "provider_id": provider["id"],
+                "model_id": model["id"],
+                "model_name": model["name"],
+                "currency_code": "USD",
+                "unit_quantity": 1000,
+                "input_unit_price": "2.00",
+                "cached_input_unit_price": "0.50",
+                "output_unit_price": "8.00",
+                "status": "active",
+            },
+        )
+    ).json()
     alias = (
         await client.post(
             "/admin/model-aliases",
@@ -353,6 +369,10 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
     assert response.json()["id"] == "chatcmpl-test"
     assert logs[0]["call_mode"] == "unified_chat"
     assert logs[0]["prompt_content"]["messages"][0]["content"] == "hi"
+    assert logs[0]["pricing_config_id"] == price["id"]
+    assert logs[0]["pricing_status"] == "calculated"
+    assert logs[0]["cost_currency"] == "USD"
+    assert logs[0]["total_cost"] is not None
     assert filtered["total"] == 1
     assert filtered["items"][0]["usage_status"] == "parsed"
 

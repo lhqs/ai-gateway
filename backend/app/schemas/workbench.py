@@ -22,6 +22,10 @@ class WorkbenchChatTestMeta(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_input_tokens: int = 0
+    total_cost: Any | None = None
+    cost_currency: str | None = None
+    pricing_status: str | None = None
     cache_hit: bool = False
     failover_triggered: bool = False
     failover_attempts: int = 0

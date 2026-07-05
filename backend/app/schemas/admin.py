@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -160,6 +161,58 @@ class ModelRead(ModelWrite):
 
 class ModelPage(BaseModel):
     items: list[ModelRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class ModelPriceConfigWrite(BaseModel):
+    provider_id: int
+    model_id: int
+    model_name: str
+    currency_code: str = "USD"
+    unit_type: str = "tokens"
+    unit_quantity: int = Field(default=1_000_000, gt=0)
+    input_unit_price: Decimal | None = None
+    cached_input_unit_price: Decimal | None = None
+    output_unit_price: Decimal | None = None
+    reasoning_output_unit_price: Decimal | None = None
+    request_unit_price: Decimal | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    status: str = "active"
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+
+class ModelPriceConfigPatch(BaseModel):
+    provider_id: int | None = None
+    model_id: int | None = None
+    model_name: str | None = None
+    currency_code: str | None = None
+    unit_type: str | None = None
+    unit_quantity: int | None = Field(default=None, gt=0)
+    input_unit_price: Decimal | None = None
+    cached_input_unit_price: Decimal | None = None
+    output_unit_price: Decimal | None = None
+    reasoning_output_unit_price: Decimal | None = None
+    request_unit_price: Decimal | None = None
+    config: dict[str, Any] | None = None
+    status: str | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+
+class ModelPriceConfigRead(ModelPriceConfigWrite):
+    id: int
+    effective_from: datetime
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ModelPriceConfigPage(BaseModel):
+    items: list[ModelPriceConfigRead]
     total: int
     limit: int
     offset: int

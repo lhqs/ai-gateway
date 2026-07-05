@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.errors import ProviderCallError
 from app.core.security import AuthContext
 from app.db.models import Model, Provider
@@ -27,6 +28,16 @@ class ChatService:
         self.failover = FailoverService()
         self.usage = UsageService(session)
         self.access_policy = AccessPolicyService()
+        self.settings = get_settings()
+
+    def _cost_currency(self, auth: AuthContext) -> str:
+        api_key_currency = (auth.api_key.access_config or {}).get("cost_currency")
+        client_currency = (auth.client.access_config or {}).get("cost_currency")
+        return str(api_key_currency or client_currency or self.settings.default_cost_currency).upper()
+
+    async def _record_usage(self, auth: AuthContext, **data: Any) -> None:
+        data.setdefault("cost_currency", self._cost_currency(auth))
+        await self.usage.record(**data)
 
     async def complete(
         self, auth: AuthContext, request_id: str, payload: ChatCompletionRequest
@@ -42,7 +53,8 @@ class ChatService:
             cache_key = self.cache.build_cache_key(request_hash)
             cached = await self.cache.get_json(cache_key)
             if cached:
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=payload.model,
@@ -89,7 +101,8 @@ class ChatService:
                 response = await self.provider_service.chat_completion(provider, model, gw_request)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 failover_triggered = attempt_index > 0
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=payload.model,
@@ -100,6 +113,7 @@ class ChatService:
                     prompt_tokens=response.prompt_tokens,
                     completion_tokens=response.completion_tokens,
                     total_tokens=response.total_tokens,
+                    cached_input_tokens=response.cached_input_tokens,
                     latency_ms=latency_ms,
                     call_mode="unified_chat",
                     usage_status=response.usage_status,
@@ -146,7 +160,8 @@ class ChatService:
                 last_error = exc
                 decision = self.failover.should_failover(exc, route.rule, attempt_index)
                 failure_reason = decision.reason or exc.error_type
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=payload.model,
@@ -206,6 +221,7 @@ class ChatService:
             prompt_tokens = 0
             completion_tokens = 0
             total_tokens = 0
+            cached_input_tokens = 0
             usage_status = "unknown"
             gw_request = GatewayChatRequest(
                 request_id=request_id,
@@ -226,10 +242,12 @@ class ChatService:
                         prompt_tokens = chunk.prompt_tokens
                         completion_tokens = chunk.completion_tokens
                         total_tokens = chunk.total_tokens
+                        cached_input_tokens = chunk.cached_input_tokens
                         raw_usage = chunk.raw_usage
                         usage_status = chunk.usage_status
                     yield chunk.data
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=payload.model,
@@ -240,6 +258,7 @@ class ChatService:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     total_tokens=total_tokens,
+                    cached_input_tokens=cached_input_tokens,
                     latency_ms=int((time.perf_counter() - started) * 1000),
                     first_token_latency_ms=first_token_ms,
                     call_mode="unified_chat",
@@ -260,7 +279,8 @@ class ChatService:
                 last_error = exc
                 decision = self.failover.should_failover(exc, route.rule, attempt_index)
                 failure_reason = decision.reason or exc.error_type
-                await self.usage.record(
+                await self._record_usage(
+                    auth,
                     request_id=request_id,
                     client_id=auth.client.id,
                     model_alias=payload.model,

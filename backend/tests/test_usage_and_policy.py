@@ -6,6 +6,7 @@ from app.services.cache_service import CacheService
 from app.services.access_policy_service import AccessPolicyService
 from app.services.failover_service import FailoverService
 from app.usage.parsers.gemini import GeminiUsageParser
+from app.usage.parsers.openai import OpenAIUsageParser
 
 
 def test_gemini_usage_parser_extracts_metadata():
@@ -23,6 +24,22 @@ def test_gemini_usage_parser_extracts_metadata():
     assert result.prompt_tokens == 7
     assert result.completion_tokens == 11
     assert result.total_tokens == 18
+
+
+def test_openai_usage_parser_extracts_cached_input_tokens():
+    result = OpenAIUsageParser().parse(
+        {
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "prompt_tokens_details": {"cached_tokens": 4},
+            }
+        }
+    )
+
+    assert result.usage_status == "parsed"
+    assert result.cached_input_tokens == 4
 
 
 def test_gemini_native_adapter_allows_whitelisted_paths_and_filters_headers():
