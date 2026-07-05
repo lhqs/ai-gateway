@@ -288,15 +288,30 @@ async def list_model_price_configs(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     model_id: int | None = None,
+    provider_id: int | None = None,
     currency_code: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    search: str | None = None,
     session: AsyncSession = Depends(session_dep),
 ):
     repo = ModelPriceConfigRepository(session)
     return {
         "items": await repo.list_filtered(
-            limit=limit, offset=offset, model_id=model_id, currency_code=currency_code
+            limit=limit,
+            offset=offset,
+            model_id=model_id,
+            provider_id=provider_id,
+            currency_code=currency_code,
+            status=status_filter,
+            search=search,
         ),
-        "total": await repo.count_filtered(model_id=model_id, currency_code=currency_code),
+        "total": await repo.count_filtered(
+            model_id=model_id,
+            provider_id=provider_id,
+            currency_code=currency_code,
+            status=status_filter,
+            search=search,
+        ),
         "limit": limit,
         "offset": offset,
     }

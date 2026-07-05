@@ -25,6 +25,38 @@ type PriceForm = {
   config: string;
 };
 
+type PriceFilter = {
+  search: string;
+  provider_id: string;
+  currency_code: string;
+  status: string;
+};
+
+const defaultFilter: PriceFilter = {
+  search: "",
+  provider_id: "",
+  currency_code: "",
+  status: ""
+};
+
+const DEFAULT_CONFIG_JSON = JSON.stringify(
+  {
+    source: "manual",
+    source_model_id: "",
+    source_name: "",
+    source_unit: "USD per 1M tokens",
+    note: "Edit this metadata to describe where the price came from.",
+    raw_pricing: {
+      prompt: "",
+      input_cache_read: "",
+      completion: "",
+      internal_reasoning: ""
+    }
+  },
+  null,
+  2
+);
+
 function defaultForm(model?: Model): PriceForm {
   return {
     provider_id: model ? String(model.provider_id) : "",
@@ -40,7 +72,7 @@ function defaultForm(model?: Model): PriceForm {
     status: "active",
     effective_from: "",
     effective_to: "",
-    config: "{}"
+    config: DEFAULT_CONFIG_JSON
   };
 }
 
@@ -86,6 +118,7 @@ export function PricingPage({ headers, setNotice }: PageProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [filter, setFilter] = useState<PriceFilter>(defaultFilter);
   const [form, setForm] = useState<PriceForm>(defaultForm());
   const [modalMode, setModalMode] = useState<"create" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -105,11 +138,21 @@ export function PricingPage({ headers, setNotice }: PageProps) {
     [models, form.provider_id]
   );
 
-  async function load() {
-    const offset = (page - 1) * PAGE_SIZE;
+  function priceParams(nextPage = page, values = filter) {
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      offset: String((nextPage - 1) * PAGE_SIZE)
+    });
+    Object.entries(values).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    return params.toString();
+  }
+
+  async function load(nextPage = page, values = filter) {
     const [priceData, modelData, providerData] = await Promise.all([
       apiWithMeta<ModelPriceConfig[]>(
-        `/admin/model-price-configs?limit=${PAGE_SIZE}&offset=${offset}`,
+        `/admin/model-price-configs?${priceParams(nextPage, values)}`,
         { headers },
         setNotice
       ),
@@ -210,8 +253,78 @@ export function PricingPage({ headers, setNotice }: PageProps) {
     await load();
   }
 
+  async function applyFilters() {
+    setPage(1);
+    await load(1, filter);
+  }
+
+  async function resetFilters() {
+    setFilter(defaultFilter);
+    setPage(1);
+    await load(1, defaultFilter);
+  }
+
   return (
     <div className="space-y-5">
+      <section className="rounded-md border border-line bg-white px-4 py-3">
+        <div className="overflow-x-auto">
+          <div className="flex min-w-[860px] items-center gap-3">
+            <label className="flex items-center gap-2">
+              <span className="whitespace-nowrap text-xs font-medium text-slate-600">Model</span>
+              <Input
+                value={filter.search}
+                onChange={(event) => setFilter({ ...filter, search: event.target.value })}
+                className="w-64"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-600">Provider</span>
+              <Select
+                value={filter.provider_id}
+                onChange={(event) => setFilter({ ...filter, provider_id: event.target.value })}
+                className="w-44"
+              >
+                <option value="">Any</option>
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-600">Currency</span>
+              <Select
+                value={filter.currency_code}
+                onChange={(event) => setFilter({ ...filter, currency_code: event.target.value })}
+                className="w-28"
+              >
+                <option value="">Any</option>
+                <option value="USD">USD</option>
+                <option value="CNY">CNY</option>
+              </Select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-600">Status</span>
+              <Select
+                value={filter.status}
+                onChange={(event) => setFilter({ ...filter, status: event.target.value })}
+                className="w-32"
+              >
+                <option value="">Any</option>
+                <option value="active">active</option>
+                <option value="disabled">disabled</option>
+              </Select>
+            </label>
+            <div className="ml-auto flex items-center gap-2">
+              <Button onClick={applyFilters}>Apply</Button>
+              <Button onClick={resetFilters} variant="light">
+                Reset
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
       <Section
         title="Model Pricing"
         action={

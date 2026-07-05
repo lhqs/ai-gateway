@@ -12,8 +12,6 @@ type UsageFilter = {
   status: string;
   native_path: string;
   usage_status: string;
-  pricing_status: string;
-  cost_currency: string;
   cache_hit: string;
   failover_triggered: string;
 };
@@ -23,8 +21,6 @@ const defaultFilter: UsageFilter = {
   status: "",
   native_path: "",
   usage_status: "",
-  pricing_status: "",
-  cost_currency: "",
   cache_hit: "",
   failover_triggered: ""
 };
@@ -104,7 +100,7 @@ export function UsagePage({ headers, setNotice }: PageProps) {
     <div className="space-y-5">
       <section className="rounded-md border border-line bg-white px-4 py-3">
         <div className="overflow-x-auto">
-          <div className="flex min-w-[1440px] items-center gap-3">
+          <div className="flex min-w-[1180px] items-center gap-3">
             <label className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-600">Mode</span>
               <Select
@@ -150,33 +146,6 @@ export function UsagePage({ headers, setNotice }: PageProps) {
                 onChange={(event) => setFilter({ ...filter, native_path: event.target.value })}
                 className="w-64"
               />
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="whitespace-nowrap text-xs font-medium text-slate-600">Pricing</span>
-              <Select
-                value={filter.pricing_status}
-                onChange={(event) => setFilter({ ...filter, pricing_status: event.target.value })}
-                className="w-44"
-              >
-                <option value="">Any</option>
-                <option value="calculated">calculated</option>
-                <option value="missing_price_config">missing_price_config</option>
-                <option value="usage_unknown">usage_unknown</option>
-                <option value="not_billable">not_billable</option>
-                <option value="not_calculated">not_calculated</option>
-              </Select>
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="whitespace-nowrap text-xs font-medium text-slate-600">Currency</span>
-              <Select
-                value={filter.cost_currency}
-                onChange={(event) => setFilter({ ...filter, cost_currency: event.target.value })}
-                className="w-24"
-              >
-                <option value="">Any</option>
-                <option value="USD">USD</option>
-                <option value="CNY">CNY</option>
-              </Select>
             </label>
             <label className="flex items-center gap-2">
               <span className="whitespace-nowrap text-xs font-medium text-slate-600">Cache Hit</span>

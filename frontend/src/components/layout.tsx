@@ -1,4 +1,5 @@
-import { Activity, Bot, Database, DollarSign, ListFilter, LogOut, Route, ServerCog, Users } from "lucide-react";
+import { Activity, Bot, Database, DollarSign, ListFilter, LogOut, PanelLeftClose, PanelLeftOpen, Route, ServerCog, Users } from "lucide-react";
+import { useState } from "react";
 import type React from "react";
 
 import { tabPaths } from "../lib/routes";
@@ -28,17 +29,20 @@ export function AppLayout({
   onLogout: () => void;
   children: React.ReactNode;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const sidebarWidth = collapsed ? "w-16" : "w-56";
+  const contentMargin = collapsed ? "ml-16" : "ml-56";
+
   return (
     <main className="min-h-screen bg-[#fbfcfb] text-ink">
-      <aside className="fixed inset-y-0 left-0 flex w-68 flex-col border-r border-line bg-white">
+      <aside className={`fixed inset-y-0 left-0 flex ${sidebarWidth} flex-col border-r border-line bg-white transition-[width] duration-200`}>
         <div className="border-b border-line px-4 py-5">
           <div className="flex items-center gap-2">
-            <img src="/favicon.svg" alt="" className="size-7" />
-            <h1 className="text-base font-semibold">LHQS AI Gateway</h1>
+            <img src="/favicon.svg" alt="" className="size-7 shrink-0" />
+            {!collapsed && <h1 className="truncate text-base font-semibold">LHQS AI Gateway</h1>}
           </div>
-         
         </div>
-        <nav className="flex-1 overflow-y-auto px-3 py-3">
+        <nav className="flex-1 overflow-y-auto px-2 py-3">
           <ul className="space-y-0.5">
             {nav.map((item) => {
               const Icon = item.icon;
@@ -57,29 +61,39 @@ export function AppLayout({
                       tab === item.key
                         ? "bg-panel font-medium text-ink"
                         : "text-slate-600 hover:bg-panel/60 hover:text-ink"
-                    }`}
+                    } ${collapsed ? "justify-center px-0" : ""}`}
                     aria-current={tab === item.key ? "page" : undefined}
+                    title={collapsed ? item.label : undefined}
                   >
                     <Icon size={16} />
-                    {item.label}
+                    {!collapsed && item.label}
                   </a>
                 </li>
               );
             })}
           </ul>
         </nav>
-        <div className="border-t border-line p-3">
+        <div className="border-t border-line p-2">
           <button
             onClick={onLogout}
-            className="flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm text-slate-600 transition-colors hover:bg-panel hover:text-ink"
+            className={`flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm text-slate-600 transition-colors hover:bg-panel hover:text-ink ${collapsed ? "justify-center px-0" : ""}`}
+            title={collapsed ? "Logout" : undefined}
           >
             <LogOut size={16} />
-            Logout
+            {!collapsed && "Logout"}
+          </button>
+          <button
+            onClick={() => setCollapsed((c) => !c)}
+            className={`mt-1 flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm text-slate-600 transition-colors hover:bg-panel hover:text-ink ${collapsed ? "justify-center px-0" : ""}`}
+            title={collapsed ? "Expand" : "Collapse"}
+          >
+            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+            {!collapsed && "Collapse"}
           </button>
         </div>
       </aside>
 
-      <section className="ml-68 px-8 py-6">
+      <section className={`${contentMargin} px-8 py-6 transition-[margin] duration-200`}>
         <header className="mb-6 flex items-center justify-between border-b border-line pb-4">
           <div>
             <h2 className="text-xl font-semibold tracking-tight">{nav.find((item) => item.key === tab)?.label}</h2>

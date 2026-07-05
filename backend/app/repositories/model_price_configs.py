@@ -10,13 +10,24 @@ class ModelPriceConfigRepository(Repository[ModelPriceConfig]):
     model = ModelPriceConfig
 
     def _filtered_query(
-        self, model_id: int | None = None, currency_code: str | None = None
+        self,
+        model_id: int | None = None,
+        currency_code: str | None = None,
+        provider_id: int | None = None,
+        status: str | None = None,
+        search: str | None = None,
     ):
         query = select(ModelPriceConfig)
         if model_id is not None:
             query = query.where(ModelPriceConfig.model_id == model_id)
         if currency_code:
             query = query.where(ModelPriceConfig.currency_code == currency_code.upper())
+        if provider_id is not None:
+            query = query.where(ModelPriceConfig.provider_id == provider_id)
+        if status:
+            query = query.where(ModelPriceConfig.status == status)
+        if search:
+            query = query.where(ModelPriceConfig.model_name.ilike(f"%{search}%"))
         return query
 
     async def list_filtered(
@@ -26,9 +37,12 @@ class ModelPriceConfigRepository(Repository[ModelPriceConfig]):
         offset: int = 0,
         model_id: int | None = None,
         currency_code: str | None = None,
+        provider_id: int | None = None,
+        status: str | None = None,
+        search: str | None = None,
     ) -> list[ModelPriceConfig]:
         query = (
-            self._filtered_query(model_id, currency_code)
+            self._filtered_query(model_id, currency_code, provider_id, status, search)
             .order_by(ModelPriceConfig.model_id, ModelPriceConfig.currency_code, ModelPriceConfig.id)
             .limit(limit)
             .offset(offset)
@@ -36,10 +50,16 @@ class ModelPriceConfigRepository(Repository[ModelPriceConfig]):
         return list(await self.session.scalars(query))
 
     async def count_filtered(
-        self, *, model_id: int | None = None, currency_code: str | None = None
+        self,
+        *,
+        model_id: int | None = None,
+        currency_code: str | None = None,
+        provider_id: int | None = None,
+        status: str | None = None,
+        search: str | None = None,
     ) -> int:
         query = select(func.count()).select_from(
-            self._filtered_query(model_id, currency_code).subquery()
+            self._filtered_query(model_id, currency_code, provider_id, status, search).subquery()
         )
         return await self.session.scalar(query) or 0
 
