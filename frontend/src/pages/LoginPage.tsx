@@ -1,16 +1,13 @@
 import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
-import { apiBase } from "../lib/api";
-
 export function LoginPage({
   onLogin
 }: {
-  onLogin: (params: { account: string; password: string; apiBaseUrl: string }) => Promise<void>;
+  onLogin: (params: { account: string; password: string }) => Promise<void>;
 }) {
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
-  const [apiBaseUrl, setApiBaseUrl] = useState(apiBase());
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -19,7 +16,7 @@ export function LoginPage({
     setLoading(true);
     setError("");
     try {
-      await onLogin({ account, password, apiBaseUrl: apiBaseUrl.replace(/\/$/, "") });
+      await onLogin({ account, password });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -38,16 +35,6 @@ export function LoginPage({
           <p className="mt-2 text-sm text-slate-600">Sign in to the gateway admin console.</p>
         </div>
         <form onSubmit={submit} className="space-y-4 p-6">
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Backend URL</span>
-            <input
-              value={apiBaseUrl}
-              onChange={(event) => setApiBaseUrl(event.target.value)}
-              className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none focus:border-accent"
-              placeholder="http://localhost:8004"
-              required
-            />
-          </label>
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-slate-600">Account</span>
             <input

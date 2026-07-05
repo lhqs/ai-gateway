@@ -1,7 +1,7 @@
 import type { AuthUser, TokenResponse } from "../types/gateway";
 
 export function apiBase() {
-  return localStorage.getItem("apiBase") || import.meta.env.VITE_API_BASE || "http://localhost:8004";
+  return import.meta.env.VITE_API_BASE || "http://localhost:8004";
 }
 
 export function authHeaders(accessToken = localStorage.getItem("accessToken") || "") {
@@ -21,6 +21,7 @@ export function clearAuth() {
   localStorage.removeItem("refreshToken");
   localStorage.removeItem("authUser");
   localStorage.removeItem("adminToken");
+  localStorage.removeItem("apiBase");
   window.dispatchEvent(new Event("auth:cleared"));
 }
 

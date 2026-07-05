@@ -63,14 +63,11 @@ export function App() {
 
   async function login({
     account,
-    password,
-    apiBaseUrl
+    password
   }: {
     account: string;
     password: string;
-    apiBaseUrl: string;
   }) {
-    localStorage.setItem("apiBase", apiBaseUrl);
     const payload = await api<TokenResponse>(
       "/auth/login",
       {
