@@ -1,4 +1,13 @@
-import { CheckCircle2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Pencil,
+  Plus,
+  RefreshCw,
+  SlidersHorizontal,
+  Trash2
+} from "lucide-react";
 import type React from "react";
 import { useEffect, useState } from "react";
 
@@ -19,6 +28,8 @@ import type { JsonValue, PageProps, Provider } from "../types/gateway";
 
 const PAGE_SIZE = 8;
 
+type ProviderType = "gemini" | "openai_compatible";
+
 type ProviderForm = {
   name: string;
   provider_type: string;
@@ -37,12 +48,28 @@ type ProviderForm = {
   allow_streaming: boolean;
 };
 
-function defaultProviderForm(): ProviderForm {
-  return {
+const PROVIDER_TEMPLATES: Record<
+  ProviderType,
+  Pick<
+    ProviderForm,
+    | "name"
+    | "provider_type"
+    | "base_url"
+    | "config"
+    | "protocol_modes"
+    | "auth_type"
+    | "auth_config"
+    | "allowed_paths"
+    | "blocked_headers"
+    | "usage_parser_type"
+    | "native_rate_limit_per_minute"
+  > & { label: string }
+> = {
+  gemini: {
+    label: "Gemini native proxy",
     name: "gemini",
     provider_type: "gemini",
     base_url: "https://generativelanguage.googleapis.com",
-    encrypted_api_key: "",
     config: "{}",
     protocol_modes: "native_proxy",
     auth_type: "api_key_query",
@@ -50,10 +77,70 @@ function defaultProviderForm(): ProviderForm {
     allowed_paths: "v1beta/models/*, v1beta/models/*:generateContent, v1beta/models/*:streamGenerateContent",
     blocked_headers: "authorization, cookie",
     usage_parser_type: "gemini",
+    native_rate_limit_per_minute: "60"
+  },
+  openai_compatible: {
+    label: "OpenAI compatible chat",
+    name: "openai",
+    provider_type: "openai_compatible",
+    base_url: "https://api.openai.com",
+    config: "{}",
+    protocol_modes: "openai_compatible",
+    auth_type: "bearer_token",
+    auth_config: '{"header":"Authorization"}',
+    allowed_paths: "",
+    blocked_headers: "authorization, cookie, set-cookie, host, content-length",
+    usage_parser_type: "openai",
+    native_rate_limit_per_minute: ""
+  }
+};
+
+function isProviderType(value: string): value is ProviderType {
+  return value === "gemini" || value === "openai_compatible";
+}
+
+function providerTemplate(value: string) {
+  return PROVIDER_TEMPLATES[isProviderType(value) ? value : "gemini"];
+}
+
+function defaultProviderForm(providerType: ProviderType = "gemini"): ProviderForm {
+  const template = PROVIDER_TEMPLATES[providerType];
+  return {
+    name: template.name,
+    provider_type: template.provider_type,
+    base_url: template.base_url,
+    encrypted_api_key: "",
+    config: template.config,
+    protocol_modes: template.protocol_modes,
+    auth_type: template.auth_type,
+    auth_config: template.auth_config,
+    allowed_paths: template.allowed_paths,
+    blocked_headers: template.blocked_headers,
+    usage_parser_type: template.usage_parser_type,
     timeout_ms: "60000",
-    native_rate_limit_per_minute: "60",
+    native_rate_limit_per_minute: template.native_rate_limit_per_minute,
     status: "active",
     allow_streaming: true
+  };
+}
+
+function applyProviderTemplate(form: ProviderForm, providerType: ProviderType): ProviderForm {
+  const currentTemplate = providerTemplate(form.provider_type);
+  const nextTemplate = PROVIDER_TEMPLATES[providerType];
+
+  return {
+    ...form,
+    name: !form.name || form.name === currentTemplate.name ? nextTemplate.name : form.name,
+    provider_type: nextTemplate.provider_type,
+    base_url: !form.base_url || form.base_url === currentTemplate.base_url ? nextTemplate.base_url : form.base_url,
+    config: nextTemplate.config,
+    protocol_modes: nextTemplate.protocol_modes,
+    auth_type: nextTemplate.auth_type,
+    auth_config: nextTemplate.auth_config,
+    allowed_paths: nextTemplate.allowed_paths,
+    blocked_headers: nextTemplate.blocked_headers,
+    usage_parser_type: nextTemplate.usage_parser_type,
+    native_rate_limit_per_minute: nextTemplate.native_rate_limit_per_minute
   };
 }
 
@@ -62,11 +149,11 @@ function providerFormFromProvider(provider: Provider): ProviderForm {
     name: provider.name,
     provider_type: provider.provider_type,
     base_url: provider.base_url,
-    encrypted_api_key: "",
-    config: JSON.stringify(provider.config || {}),
+    encrypted_api_key: provider.encrypted_api_key || "",
+    config: prettyJson(provider.config || {}),
     protocol_modes: provider.protocol_modes.join(", "),
     auth_type: provider.auth_type,
-    auth_config: JSON.stringify(provider.auth_config || {}),
+    auth_config: prettyJson(provider.auth_config || {}),
     allowed_paths: provider.allowed_paths.join(", "),
     blocked_headers: provider.blocked_headers.join(", "),
     usage_parser_type: provider.usage_parser_type,
@@ -79,11 +166,15 @@ function providerFormFromProvider(provider: Provider): ProviderForm {
   };
 }
 
-function providerPayload(form: ProviderForm) {
-  return {
-    name: form.name,
+function prettyJson(value: Record<string, JsonValue>) {
+  return JSON.stringify(value || {}, null, 2);
+}
+
+function providerPayload(form: ProviderForm, keepExistingApiKey: boolean) {
+  const payload = {
+    name: form.name.trim(),
     provider_type: form.provider_type,
-    base_url: form.base_url,
+    base_url: form.base_url.trim(),
     encrypted_api_key: form.encrypted_api_key || null,
     config: JSON.parse(form.config || "{}"),
     protocol_modes: parseCsv(form.protocol_modes),
@@ -99,6 +190,79 @@ function providerPayload(form: ProviderForm) {
     status: form.status,
     allow_streaming: form.allow_streaming
   };
+
+  if (keepExistingApiKey && !form.encrypted_api_key) {
+    const { encrypted_api_key: _encryptedApiKey, ...payloadWithoutApiKey } = payload;
+    return payloadWithoutApiKey;
+  }
+
+  return payload;
+}
+
+function ProviderAdvancedFields({
+  form,
+  onChange
+}: {
+  form: ProviderForm;
+  onChange: (patch: Partial<ProviderForm>) => void;
+}) {
+  return (
+    <div className="grid gap-3 border-t border-line p-3 md:grid-cols-2">
+      <Field label="Protocol Modes">
+        <Input
+          value={form.protocol_modes}
+          onChange={(event) => onChange({ protocol_modes: event.target.value })}
+        />
+      </Field>
+      <Field label="Auth Type">
+        <Select value={form.auth_type} onChange={(event) => onChange({ auth_type: event.target.value })}>
+          <option value="api_key_query">api_key_query</option>
+          <option value="api_key_header">api_key_header</option>
+          <option value="bearer_token">bearer_token</option>
+        </Select>
+      </Field>
+      <Field label="Usage Parser">
+        <Select
+          value={form.usage_parser_type}
+          onChange={(event) => onChange({ usage_parser_type: event.target.value })}
+        >
+          <option value="gemini">gemini</option>
+          <option value="openai">openai</option>
+          <option value="none">none</option>
+        </Select>
+      </Field>
+      <Field label="Timeout ms">
+        <Input value={form.timeout_ms} onChange={(event) => onChange({ timeout_ms: event.target.value })} />
+      </Field>
+      <Field label="Native Rate / min">
+        <Input
+          value={form.native_rate_limit_per_minute}
+          onChange={(event) => onChange({ native_rate_limit_per_minute: event.target.value })}
+        />
+      </Field>
+      <Field label="Blocked Headers">
+        <Input
+          value={form.blocked_headers}
+          onChange={(event) => onChange({ blocked_headers: event.target.value })}
+        />
+      </Field>
+      <div className="md:col-span-2">
+        <Field label="Allowed Paths">
+          <Input value={form.allowed_paths} onChange={(event) => onChange({ allowed_paths: event.target.value })} />
+        </Field>
+      </div>
+      <div className="md:col-span-2">
+        <Field label="Provider Config JSON">
+          <TextArea value={form.config} onChange={(event) => onChange({ config: event.target.value })} />
+        </Field>
+      </div>
+      <div className="md:col-span-2">
+        <Field label="Auth Config JSON">
+          <TextArea value={form.auth_config} onChange={(event) => onChange({ auth_config: event.target.value })} />
+        </Field>
+      </div>
+    </div>
+  );
 }
 
 export function ProvidersPage({ headers, setNotice }: PageProps) {
@@ -109,6 +273,7 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
   const [modalMode, setModalMode] = useState<"create" | "edit" | null>(null);
   const [editingProviderId, setEditingProviderId] = useState<number | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Provider | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   async function load() {
     const offset = (providerPage - 1) * PAGE_SIZE;
@@ -132,26 +297,37 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
   function openCreateProvider() {
     setEditingProviderId(null);
     setForm(defaultProviderForm());
+    setShowAdvanced(false);
     setModalMode("create");
   }
 
   function openEditProvider(provider: Provider) {
     setEditingProviderId(provider.id);
     setForm(providerFormFromProvider(provider));
+    setShowAdvanced(false);
     setModalMode("edit");
+  }
+
+  function updateForm(patch: Partial<ProviderForm>) {
+    setForm((current) => ({ ...current, ...patch }));
+  }
+
+  function changeProviderType(value: string) {
+    if (!isProviderType(value)) return;
+    setForm((current) => applyProviderTemplate(current, value));
   }
 
   async function submitProvider(event: React.FormEvent) {
     event.preventDefault();
+    const isEdit = modalMode === "edit" && editingProviderId !== null;
     let payload: ReturnType<typeof providerPayload>;
     try {
-      payload = providerPayload(form);
+      payload = providerPayload(form, isEdit);
     } catch {
       setNotice("Provider/Auth JSON config is invalid");
       return;
     }
 
-    const isEdit = modalMode === "edit" && editingProviderId !== null;
     await api<Provider>(
       isEdit ? `/admin/providers/${editingProviderId}` : "/admin/providers",
       {
@@ -257,103 +433,31 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
       >
         <form onSubmit={submitProvider} className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Name">
-              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
-            </Field>
-            <Field label="Type">
-              <Select
-                value={form.provider_type}
-                onChange={(event) => setForm({ ...form, provider_type: event.target.value })}
-              >
-                <option value="gemini">gemini</option>
-                <option value="openai_compatible">openai_compatible</option>
+            <Field label="Provider">
+              <Select value={form.provider_type} onChange={(event) => changeProviderType(event.target.value)}>
+                <option value="gemini">{PROVIDER_TEMPLATES.gemini.label}</option>
+                <option value="openai_compatible">{PROVIDER_TEMPLATES.openai_compatible.label}</option>
               </Select>
+            </Field>
+            <Field label="Name">
+              <Input value={form.name} onChange={(event) => updateForm({ name: event.target.value })} required />
             </Field>
             <Field label="Base URL">
               <Input
                 value={form.base_url}
-                onChange={(event) => setForm({ ...form, base_url: event.target.value })}
+                onChange={(event) => updateForm({ base_url: event.target.value })}
                 required
               />
             </Field>
             <Field label="API Key">
               <Input
-                type="password"
                 value={form.encrypted_api_key}
-                onChange={(event) => setForm({ ...form, encrypted_api_key: event.target.value })}
+                onChange={(event) => updateForm({ encrypted_api_key: event.target.value })}
                 placeholder={modalMode === "edit" ? "Leave blank to keep current value" : ""}
               />
             </Field>
-            <Field label="Protocol Modes">
-              <Input
-                value={form.protocol_modes}
-                onChange={(event) => setForm({ ...form, protocol_modes: event.target.value })}
-              />
-            </Field>
-            <Field label="Auth Type">
-              <Select
-                value={form.auth_type}
-                onChange={(event) => setForm({ ...form, auth_type: event.target.value })}
-              >
-                <option value="api_key_query">api_key_query</option>
-                <option value="api_key_header">api_key_header</option>
-                <option value="bearer_token">bearer_token</option>
-              </Select>
-            </Field>
-            <div className="md:col-span-2">
-              <Field label="Provider Config JSON">
-                <TextArea
-                  value={form.config}
-                  onChange={(event) => setForm({ ...form, config: event.target.value })}
-                />
-              </Field>
-            </div>
-            <div className="md:col-span-2">
-              <Field label="Auth Config JSON">
-                <TextArea
-                  value={form.auth_config}
-                  onChange={(event) => setForm({ ...form, auth_config: event.target.value })}
-                />
-              </Field>
-            </div>
-            <div className="md:col-span-2">
-              <Field label="Allowed Paths">
-                <Input
-                  value={form.allowed_paths}
-                  onChange={(event) => setForm({ ...form, allowed_paths: event.target.value })}
-                />
-              </Field>
-            </div>
-            <Field label="Blocked Headers">
-              <Input
-                value={form.blocked_headers}
-                onChange={(event) => setForm({ ...form, blocked_headers: event.target.value })}
-              />
-            </Field>
-            <Field label="Usage Parser">
-              <Select
-                value={form.usage_parser_type}
-                onChange={(event) => setForm({ ...form, usage_parser_type: event.target.value })}
-              >
-                <option value="gemini">gemini</option>
-                <option value="openai">openai</option>
-                <option value="none">none</option>
-              </Select>
-            </Field>
-            <Field label="Timeout ms">
-              <Input
-                value={form.timeout_ms}
-                onChange={(event) => setForm({ ...form, timeout_ms: event.target.value })}
-              />
-            </Field>
-            <Field label="Native Rate / min">
-              <Input
-                value={form.native_rate_limit_per_minute}
-                onChange={(event) => setForm({ ...form, native_rate_limit_per_minute: event.target.value })}
-              />
-            </Field>
             <Field label="Status">
-              <Select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+              <Select value={form.status} onChange={(event) => updateForm({ status: event.target.value })}>
                 <option value="active">active</option>
                 <option value="disabled">disabled</option>
               </Select>
@@ -362,11 +466,25 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
               <input
                 type="checkbox"
                 checked={form.allow_streaming}
-                onChange={(event) => setForm({ ...form, allow_streaming: event.target.checked })}
+                onChange={(event) => updateForm({ allow_streaming: event.target.checked })}
                 className="h-4 w-4 rounded border-line"
               />
               Allow streaming
             </label>
+          </div>
+          <div className="overflow-hidden rounded-md border border-line bg-white">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((value) => !value)}
+              className="flex h-10 w-full items-center justify-between px-3 text-left text-sm font-medium text-ink"
+            >
+              <span className="inline-flex items-center gap-2">
+                <SlidersHorizontal size={15} />
+                Advanced
+              </span>
+              {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
+            {showAdvanced && <ProviderAdvancedFields form={form} onChange={updateForm} />}
           </div>
           <div className="flex justify-end gap-2">
             <Button onClick={() => setModalMode(null)} variant="light">
