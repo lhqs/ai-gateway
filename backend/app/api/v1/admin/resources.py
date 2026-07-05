@@ -25,15 +25,19 @@ from app.schemas.admin import (
     ClientPatch,
     ClientRead,
     ModelAliasRead,
+    ModelAliasPage,
     ModelAliasPatch,
     ModelAliasWrite,
+    ModelPage,
     ModelPatch,
     ModelRead,
     ModelWrite,
+    ProviderPage,
     ProviderPatch,
     ProviderRead,
     ProviderWrite,
     RouteRulePatch,
+    RouteRulePage,
     RouteRuleRead,
     RouteRuleWrite,
 )
@@ -135,9 +139,19 @@ async def delete_api_key(item_id: int, session: AsyncSession = Depends(session_d
     await repo.delete(item)
 
 
-@router.get("/providers", response_model=list[ProviderRead])
-async def list_providers(session: AsyncSession = Depends(session_dep)):
-    return await ProviderRepository(session).list()
+@router.get("/providers", response_model=ProviderPage)
+async def list_providers(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = ProviderRepository(session)
+    return {
+        "items": await repo.list(limit=limit, offset=offset),
+        "total": await repo.count(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/providers", response_model=ProviderRead)
@@ -148,6 +162,20 @@ async def create_provider(payload: ProviderWrite, session: AsyncSession = Depend
 @router.patch("/providers/{item_id}", response_model=ProviderRead)
 async def update_provider(item_id: int, payload: ProviderPatch, session: AsyncSession = Depends(session_dep)):
     return await _patch(ProviderRepository(session), item_id, payload.model_dump(exclude_unset=True))
+
+
+@router.delete("/providers/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_provider(item_id: int, session: AsyncSession = Depends(session_dep)):
+    repo = ProviderRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+
+    model_repo = ModelRepository(session)
+    model_ids = await model_repo.list_ids_for_provider(item_id)
+    await RouteRuleRepository(session).remove_model_references(model_ids)
+    await model_repo.delete_for_provider(item_id)
+    await repo.delete(item)
 
 
 @router.post("/providers/{item_id}/test")
@@ -165,9 +193,19 @@ async def test_provider(item_id: int, session: AsyncSession = Depends(session_de
         return {"status": "unhealthy", "error": str(exc)}
 
 
-@router.get("/models", response_model=list[ModelRead])
-async def list_models(session: AsyncSession = Depends(session_dep)):
-    return await ModelRepository(session).list()
+@router.get("/models", response_model=ModelPage)
+async def list_models(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = ModelRepository(session)
+    return {
+        "items": await repo.list(limit=limit, offset=offset),
+        "total": await repo.count(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/models", response_model=ModelRead)
@@ -180,13 +218,33 @@ async def update_model(item_id: int, payload: ModelPatch, session: AsyncSession 
     return await _patch(ModelRepository(session), item_id, payload.model_dump(exclude_unset=True))
 
 
+@router.delete("/models/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_model(item_id: int, session: AsyncSession = Depends(session_dep)):
+    repo = ModelRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    await RouteRuleRepository(session).remove_model_references([item_id])
+    await repo.delete(item)
+
+
 class ModelAliasRepository(Repository[ModelAlias]):
     model = ModelAlias
 
 
-@router.get("/model-aliases", response_model=list[ModelAliasRead])
-async def list_aliases(session: AsyncSession = Depends(session_dep)):
-    return await ModelAliasRepository(session).list()
+@router.get("/model-aliases", response_model=ModelAliasPage)
+async def list_aliases(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = ModelAliasRepository(session)
+    return {
+        "items": await repo.list(limit=limit, offset=offset),
+        "total": await repo.count(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/model-aliases", response_model=ModelAliasRead)
@@ -199,9 +257,29 @@ async def update_alias(item_id: int, payload: ModelAliasPatch, session: AsyncSes
     return await _patch(ModelAliasRepository(session), item_id, payload.model_dump(exclude_unset=True))
 
 
-@router.get("/route-rules", response_model=list[RouteRuleRead])
-async def list_route_rules(session: AsyncSession = Depends(session_dep)):
-    return await RouteRuleRepository(session).list()
+@router.delete("/model-aliases/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_alias(item_id: int, session: AsyncSession = Depends(session_dep)):
+    repo = ModelAliasRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    await RouteRuleRepository(session).delete_for_alias(item_id)
+    await repo.delete(item)
+
+
+@router.get("/route-rules", response_model=RouteRulePage)
+async def list_route_rules(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = RouteRuleRepository(session)
+    return {
+        "items": await repo.list(limit=limit, offset=offset),
+        "total": await repo.count(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/route-rules", response_model=RouteRuleRead)
@@ -212,6 +290,15 @@ async def create_route_rule(payload: RouteRuleWrite, session: AsyncSession = Dep
 @router.patch("/route-rules/{item_id}", response_model=RouteRuleRead)
 async def update_route_rule(item_id: int, payload: RouteRulePatch, session: AsyncSession = Depends(session_dep)):
     return await _patch(RouteRuleRepository(session), item_id, payload.model_dump(exclude_unset=True))
+
+
+@router.delete("/route-rules/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_route_rule(item_id: int, session: AsyncSession = Depends(session_dep)):
+    repo = RouteRuleRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    await repo.delete(item)
 
 
 @router.get("/usage-logs", response_model=list[UsageLogRead])

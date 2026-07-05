@@ -84,6 +84,149 @@ async def test_admin_clients_and_keys_pagination_and_delete(app_client):
 
 
 @pytest.mark.asyncio
+async def test_admin_providers_pagination_and_delete_cleanup(app_client):
+    client = app_client
+    provider_one = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "openai",
+                "provider_type": "openai_compatible",
+                "base_url": "https://openai.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+    provider_two = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "gemini",
+                "provider_type": "gemini",
+                "base_url": "https://gemini.test",
+                "protocol_modes": ["native_proxy"],
+                "status": "active",
+            },
+        )
+    ).json()
+    model_one = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider_one["id"], "name": "gpt-test", "status": "active"},
+        )
+    ).json()
+    model_two = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider_two["id"], "name": "gemini-test", "status": "active"},
+        )
+    ).json()
+    alias = (
+        await client.post("/admin/model-aliases", json={"alias": "default-chat", "status": "active"})
+    ).json()
+    await client.post(
+        "/admin/route-rules",
+        json={
+            "model_alias_id": alias["id"],
+            "primary_model_id": model_two["id"],
+            "fallback_model_ids": [model_one["id"]],
+            "status": "active",
+        },
+    )
+
+    provider_page = await client.get("/admin/providers?limit=1&offset=0")
+    assert provider_page.json()["total"] == 2
+    assert len(provider_page.json()["items"]) == 1
+
+    assert (await client.delete(f"/admin/providers/{provider_one['id']}")).status_code == 204
+    providers_after_delete = (await client.get("/admin/providers")).json()
+    models_after_delete = (await client.get("/admin/models")).json()
+    routes_after_delete = (await client.get("/admin/route-rules")).json()
+
+    assert providers_after_delete["total"] == 1
+    assert [item["id"] for item in providers_after_delete["items"]] == [provider_two["id"]]
+    assert [item["id"] for item in models_after_delete["items"]] == [model_two["id"]]
+    assert routes_after_delete["items"][0]["fallback_model_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_admin_models_aliases_and_routes_pagination_and_delete(app_client):
+    client = app_client
+    provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "openai",
+                "provider_type": "openai_compatible",
+                "base_url": "https://openai.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+    primary_model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider["id"], "name": "primary-model", "status": "active"},
+        )
+    ).json()
+    fallback_model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider["id"], "name": "fallback-model", "status": "active"},
+        )
+    ).json()
+    alias = (
+        await client.post("/admin/model-aliases", json={"alias": "default-chat", "status": "active"})
+    ).json()
+    route_rule = (
+        await client.post(
+            "/admin/route-rules",
+            json={
+                "model_alias_id": alias["id"],
+                "primary_model_id": primary_model["id"],
+                "fallback_model_ids": [fallback_model["id"]],
+                "status": "active",
+            },
+        )
+    ).json()
+
+    model_page = await client.get("/admin/models?limit=1&offset=0")
+    alias_page = await client.get("/admin/model-aliases?limit=1&offset=0")
+    route_page = await client.get("/admin/route-rules?limit=1&offset=0")
+
+    assert model_page.json()["total"] == 2
+    assert len(model_page.json()["items"]) == 1
+    assert alias_page.json()["total"] == 1
+    assert route_page.json()["total"] == 1
+
+    assert (await client.delete(f"/admin/models/{fallback_model['id']}")).status_code == 204
+    routes_after_fallback_delete = (await client.get("/admin/route-rules")).json()["items"]
+    assert routes_after_fallback_delete[0]["fallback_model_ids"] == []
+
+    assert (await client.delete(f"/admin/route-rules/{route_rule['id']}")).status_code == 204
+    assert (await client.get("/admin/route-rules")).json()["total"] == 0
+
+    replacement_route = (
+        await client.post(
+            "/admin/route-rules",
+            json={
+                "model_alias_id": alias["id"],
+                "primary_model_id": primary_model["id"],
+                "fallback_model_ids": [],
+                "status": "active",
+            },
+        )
+    ).json()
+    assert replacement_route["id"]
+
+    assert (await client.delete(f"/admin/model-aliases/{alias['id']}")).status_code == 204
+    assert (await client.get("/admin/model-aliases")).json()["total"] == 0
+    assert (await client.get("/admin/route-rules")).json()["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
     class Adapter:
         async def chat_completion(self, provider, model, request):

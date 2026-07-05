@@ -9,7 +9,8 @@ export async function api<T>(
 ): Promise<T> {
   const response = await fetch(`${apiBase()}${path}`, options);
   const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("json") ? await response.json() : await response.text();
+  const text = await response.text();
+  const payload = contentType.includes("json") && text ? JSON.parse(text) : text;
   if (!response.ok) {
     const message = typeof payload === "string" ? payload : payload.detail || "Request failed";
     setNotice(message);

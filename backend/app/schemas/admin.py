@@ -119,6 +119,13 @@ class ProviderRead(ProviderWrite):
     model_config = {"from_attributes": True}
 
 
+class ProviderPage(BaseModel):
+    items: list[ProviderRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class ModelWrite(BaseModel):
     provider_id: int
     name: str
@@ -151,6 +158,13 @@ class ModelRead(ModelWrite):
     model_config = {"from_attributes": True}
 
 
+class ModelPage(BaseModel):
+    items: list[ModelRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class ModelAliasWrite(BaseModel):
     alias: str
     description: str | None = None
@@ -169,6 +183,13 @@ class ModelAliasRead(ModelAliasWrite):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ModelAliasPage(BaseModel):
+    items: list[ModelAliasRead]
+    total: int
+    limit: int
+    offset: int
 
 
 class RouteRuleWrite(BaseModel):
@@ -213,3 +234,10 @@ class RouteRuleRead(RouteRuleWrite):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RouteRulePage(BaseModel):
+    items: list[RouteRuleRead]
+    total: int
+    limit: int
+    offset: int

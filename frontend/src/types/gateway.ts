@@ -41,13 +41,18 @@ export type Provider = {
   name: string;
   provider_type: string;
   base_url: string;
+  encrypted_api_key: string | null;
+  config: Record<string, JsonValue>;
   status: string;
   protocol_modes: string[];
   auth_type: string;
+  auth_config: Record<string, JsonValue>;
   allowed_paths: string[];
   blocked_headers: string[];
   usage_parser_type: string;
   health_status: string;
+  failure_threshold: number;
+  cooldown_seconds: number;
   timeout_ms: number;
   allow_streaming: boolean;
   native_rate_limit_per_minute: number | null;
