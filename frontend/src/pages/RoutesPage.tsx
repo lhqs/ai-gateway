@@ -6,7 +6,7 @@ import { Badge, Button, DataTable, Field, Input, Modal, Pagination, Section, Sel
 import { api, apiWithMeta, parseNumberCsv } from "../lib/api";
 import type { Alias, Model, PageProps, RouteRule } from "../types/gateway";
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 20;
 
 type RouteForm = {
   model_alias_id: string;

@@ -6,7 +6,7 @@ import { Badge, Button, DataTable, Field, Input, Modal, Pagination, Section, Sel
 import { api, apiWithMeta } from "../lib/api";
 import type { Model, ModelPriceConfig, PageProps, Provider } from "../types/gateway";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 type PriceForm = {
   provider_id: string;

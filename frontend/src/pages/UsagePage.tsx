@@ -5,7 +5,7 @@ import { Badge, Button, Input, Pagination, Section, Select } from "../components
 import { apiWithMeta } from "../lib/api";
 import type { PageProps, UsageLog } from "../types/gateway";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 type UsageFilter = {
   call_mode: string;

@@ -6,7 +6,7 @@ import { Badge, Button, DataTable, Field, Input, Modal, Pagination, Section, Sel
 import { api, apiWithMeta, parseCsv } from "../lib/api";
 import type { Alias, Model, PageProps, Provider, RouteRule } from "../types/gateway";
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 20;
 
 type ModelForm = {
   provider_id: string;

@@ -12,6 +12,15 @@ class ModelRepository(Repository[Model]):
             select(Model).where(Model.id == model_id, Model.status == "active")
         )
 
+    async def get_active_by_provider_and_name(self, provider_id: int, name: str) -> Model | None:
+        return await self.session.scalar(
+            select(Model).where(
+                Model.provider_id == provider_id,
+                Model.name == name,
+                Model.status == "active",
+            )
+        )
+
     async def list_ids_for_provider(self, provider_id: int) -> list[int]:
         result = await self.session.scalars(select(Model.id).where(Model.provider_id == provider_id))
         return list(result)

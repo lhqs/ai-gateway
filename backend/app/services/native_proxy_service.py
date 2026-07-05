@@ -89,9 +89,7 @@ class NativeProxyService:
                 return content.decode("utf-8", errors="replace")
         return content.decode("utf-8", errors="replace")[:20000]
 
-    async def _resolve_native_model_alias(
-        self, provider: Provider, native_path: str
-    ) -> NativePathTarget:
+    async def _resolve_native_model_target(self, provider: Provider, native_path: str) -> NativePathTarget:
         match = NATIVE_MODEL_PATH_PATTERN.search(native_path)
         if not match:
             return NativePathTarget(upstream_path=native_path)
@@ -99,6 +97,9 @@ class NativeProxyService:
         requested_model = match.group("model")
         found = await self.route_rules.get_for_alias(requested_model)
         if not found:
+            direct_model = await self.models.get_active_by_provider_and_name(provider.id, requested_model)
+            if direct_model:
+                return NativePathTarget(upstream_path=native_path, model=direct_model)
             return NativePathTarget(upstream_path=native_path)
 
         alias, rule = found
@@ -135,7 +136,7 @@ class NativeProxyService:
         path_target = NativePathTarget(upstream_path=native_path)
         try:
             self.access_policy.ensure_native_allowed(auth, provider, native_path)
-            path_target = await self._resolve_native_model_alias(provider, native_path)
+            path_target = await self._resolve_native_model_target(provider, native_path)
             if path_target.model_alias and path_target.model:
                 self.access_policy.ensure_chat_allowed(
                     auth, path_target.model_alias, provider, path_target.model
@@ -257,7 +258,7 @@ class NativeProxyService:
         path_target = NativePathTarget(upstream_path=native_path)
         try:
             self.access_policy.ensure_native_allowed(auth, provider, native_path)
-            path_target = await self._resolve_native_model_alias(provider, native_path)
+            path_target = await self._resolve_native_model_target(provider, native_path)
             if path_target.model_alias and path_target.model:
                 self.access_policy.ensure_chat_allowed(
                     auth, path_target.model_alias, provider, path_target.model

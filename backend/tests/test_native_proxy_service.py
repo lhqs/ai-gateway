@@ -49,6 +49,11 @@ class FakeModels:
     async def get_active(self, model_id):
         return self.model if self.model and model_id == self.model.id else None
 
+    async def get_active_by_provider_and_name(self, provider_id, name):
+        if self.model and self.model.provider_id == provider_id and self.model.name == name:
+            return self.model
+        return None
+
 
 class FakeRequest:
     def __init__(self, body=b"{}", headers=None, query=None):
@@ -199,6 +204,47 @@ async def test_native_proxy_rewrites_model_alias_in_gemini_path(monkeypatch):
     assert service.usage.records[0]["model_alias"] == "gemini-chat"
     assert service.usage.records[0]["model_id"] == 10
     assert service.usage.records[0]["native_path"] == "v1beta/models/gemini-chat:generateContent"
+
+
+@pytest.mark.asyncio
+async def test_native_proxy_resolves_direct_model_name_for_usage_context(monkeypatch):
+    class Adapter:
+        async def forward(self, provider, request):
+            assert request.native_path == "v1beta/models/gemini-3.1-flash-lite:generateContent"
+            return NativeProxyResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=b'{"ok":true}',
+                usage=NativeUsageResult(prompt_tokens=2, completion_tokens=3, total_tokens=5, usage_status="parsed"),
+            )
+
+    from app.services import native_proxy_service
+
+    monkeypatch.setattr(
+        native_proxy_service.registry, "get_native", lambda provider_type: Adapter()
+    )
+
+    model = Model(id=11, provider_id=1, name="gemini-3.1-flash-lite", status="active")
+    service = NativeProxyService(session=None, redis=None)  # type: ignore[arg-type]
+    service.providers = FakeProviders(provider())
+    service.route_rules = FakeRouteRules()
+    service.models = FakeModels(model)
+    service.usage = FakeUsage()
+    service.rate_limiter = FakeRateLimiter()
+
+    response = await service.forward(
+        auth({"model_ids": [11], "provider_names": ["gemini"]}),
+        "req-direct",
+        "gemini",
+        "v1beta/models/gemini-3.1-flash-lite:generateContent",
+        "POST",
+        FakeRequest(),
+    )
+
+    assert response.status_code == 200
+    assert service.usage.records[0]["model_alias"] is None
+    assert service.usage.records[0]["model_id"] == 11
+    assert service.usage.records[0]["usage_status"] == "parsed"
 
 
 @pytest.mark.asyncio
