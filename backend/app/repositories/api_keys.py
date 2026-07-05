@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from app.db.models import ApiKey
 from app.repositories.base import Repository
@@ -26,3 +26,7 @@ class ApiKeyRepository(Repository[ApiKey]):
             select(ApiKey).order_by(ApiKey.id.desc()).limit(limit).offset(offset)
         )
         return list(result)
+
+    async def delete_for_client(self, client_id: int) -> None:
+        await self.session.execute(delete(ApiKey).where(ApiKey.client_id == client_id))
+        await self.session.flush()

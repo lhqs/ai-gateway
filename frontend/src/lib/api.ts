@@ -18,6 +18,15 @@ export async function api<T>(
   return payload as T;
 }
 
+export async function apiWithMeta<T>(
+  path: string,
+  options: RequestInit,
+  setNotice: (value: string) => void
+): Promise<{ data: T; total: number }> {
+  const payload = await api<{ items: T; total: number }>(path, options, setNotice);
+  return { data: payload.items, total: payload.total };
+}
+
 export function parseCsv(value: string) {
   return value
     .split(",")

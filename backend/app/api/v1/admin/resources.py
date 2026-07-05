@@ -18,8 +18,10 @@ from app.repositories.usage_logs import UsageLogRepository
 from app.schemas.admin import (
     ApiKeyCreate,
     ApiKeyCreated,
+    ApiKeyPage,
     ApiKeyRead,
     ClientCreate,
+    ClientPage,
     ClientPatch,
     ClientRead,
     ModelAliasRead,
@@ -51,9 +53,19 @@ async def _patch(repo: Repository, item_id: int, data: dict[str, Any]):
     return item
 
 
-@router.get("/clients", response_model=list[ClientRead])
-async def list_clients(session: AsyncSession = Depends(session_dep)):
-    return await ClientRepository(session).list()
+@router.get("/clients", response_model=ClientPage)
+async def list_clients(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = ClientRepository(session)
+    return {
+        "items": await repo.list(limit=limit, offset=offset),
+        "total": await repo.count(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/clients", response_model=ClientRead)
@@ -64,6 +76,16 @@ async def create_client(payload: ClientCreate, session: AsyncSession = Depends(s
 @router.patch("/clients/{item_id}", response_model=ClientRead)
 async def update_client(item_id: int, payload: ClientPatch, session: AsyncSession = Depends(session_dep)):
     return await _patch(ClientRepository(session), item_id, payload.model_dump(exclude_unset=True))
+
+
+@router.delete("/clients/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_client(item_id: int, session: AsyncSession = Depends(session_dep)):
+    repo = ClientRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    await ApiKeyRepository(session).delete_for_client(item_id)
+    await repo.delete(item)
 
 
 @router.post("/api-keys", response_model=ApiKeyCreated)
@@ -84,14 +106,33 @@ async def create_api_key(payload: ApiKeyCreate, session: AsyncSession = Depends(
     return ApiKeyCreated(id=item.id, key=raw_key, key_prefix=prefix)
 
 
-@router.get("/api-keys", response_model=list[ApiKeyRead])
-async def list_api_keys(limit: int = 100, offset: int = 0, session: AsyncSession = Depends(session_dep)):
-    return await ApiKeyRepository(session).list_public(limit=limit, offset=offset)
+@router.get("/api-keys", response_model=ApiKeyPage)
+async def list_api_keys(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = ApiKeyRepository(session)
+    return {
+        "items": await repo.list_public(limit=limit, offset=offset),
+        "total": await repo.count(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.patch("/api-keys/{item_id}")
 async def update_api_key(item_id: int, payload: dict[str, Any], session: AsyncSession = Depends(session_dep)):
     return await _patch(ApiKeyRepository(session), item_id, payload)
+
+
+@router.delete("/api-keys/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_api_key(item_id: int, session: AsyncSession = Depends(session_dep)):
+    repo = ApiKeyRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    await repo.delete(item)
 
 
 @router.get("/providers", response_model=list[ProviderRead])

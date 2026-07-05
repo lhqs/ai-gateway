@@ -1,6 +1,6 @@
 from typing import Any, Generic, TypeVar
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Base
@@ -21,11 +21,18 @@ class Repository(Generic[ModelT]):
         result = await self.session.scalars(select(self.model).limit(limit).offset(offset))
         return list(result)
 
+    async def count(self) -> int:
+        return await self.session.scalar(select(func.count()).select_from(self.model)) or 0
+
     async def create(self, data: dict[str, Any]) -> ModelT:
         item = self.model(**data)
         self.session.add(item)
         await self.session.flush()
         return item
+
+    async def delete(self, item: ModelT) -> None:
+        await self.session.delete(item)
+        await self.session.flush()
 
     async def first(self, stmt: Select[tuple[ModelT]]) -> ModelT | None:
         return await self.session.scalar(stmt)

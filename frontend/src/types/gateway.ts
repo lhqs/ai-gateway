@@ -17,6 +17,13 @@ export type Client = {
   access_config: Record<string, JsonValue>;
 };
 
+export type PageResponse<T> = {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type ApiKey = {
   id: number;
   client_id: number;

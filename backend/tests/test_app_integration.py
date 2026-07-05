@@ -50,6 +50,40 @@ async def app_client(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_admin_clients_and_keys_pagination_and_delete(app_client):
+    client = app_client
+    client_one = (await client.post("/admin/clients", json={"name": "client-one"})).json()
+    client_two = (await client.post("/admin/clients", json={"name": "client-two"})).json()
+    key_one = (
+        await client.post("/admin/api-keys", json={"client_id": client_one["id"], "name": "key-one"})
+    ).json()
+    key_two = (
+        await client.post("/admin/api-keys", json={"client_id": client_two["id"], "name": "key-two"})
+    ).json()
+
+    client_page = await client.get("/admin/clients?limit=1&offset=0")
+    key_page = await client.get("/admin/api-keys?limit=1&offset=0")
+
+    assert client_page.json()["total"] == 2
+    assert len(client_page.json()["items"]) == 1
+    assert key_page.json()["total"] == 2
+    assert len(key_page.json()["items"]) == 1
+
+    assert (await client.delete(f"/admin/api-keys/{key_two['id']}")).status_code == 204
+    keys_after_key_delete = (await client.get("/admin/api-keys")).json()["items"]
+    assert [item["id"] for item in keys_after_key_delete] == [key_one["id"]]
+
+    assert (await client.delete(f"/admin/clients/{client_one['id']}")).status_code == 204
+    clients_after_client_delete = await client.get("/admin/clients")
+    keys_after_client_delete = await client.get("/admin/api-keys")
+
+    assert clients_after_client_delete.json()["total"] == 1
+    assert [item["id"] for item in clients_after_client_delete.json()["items"]] == [client_two["id"]]
+    assert keys_after_client_delete.json()["total"] == 0
+    assert keys_after_client_delete.json()["items"] == []
+
+
+@pytest.mark.asyncio
 async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
     class Adapter:
         async def chat_completion(self, provider, model, request):
@@ -83,7 +117,7 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
             },
         )
     ).json()
-    api_keys = (await client.get("/admin/api-keys")).json()
+    api_keys = (await client.get("/admin/api-keys")).json()["items"]
     assert api_keys[0]["key"] == key_payload["key"]
     assert "key_hash" not in api_keys[0]
     provider = (

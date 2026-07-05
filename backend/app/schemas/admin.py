@@ -26,6 +26,13 @@ class ClientRead(ClientCreate):
     model_config = {"from_attributes": True}
 
 
+class ClientPage(BaseModel):
+    items: list[ClientRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class ApiKeyCreate(BaseModel):
     client_id: int
     name: str
@@ -53,6 +60,13 @@ class ApiKeyRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ApiKeyPage(BaseModel):
+    items: list[ApiKeyRead]
+    total: int
+    limit: int
+    offset: int
 
 
 class ProviderWrite(BaseModel):
