@@ -129,7 +129,7 @@ export function DataTable({ columns, rows }: { columns: string[]; rows: React.Re
           {rows.map((row, index) => (
             <tr key={index} className="border-t border-line">
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="max-w-[320px] truncate px-3 py-2 align-top">
+                <td key={cellIndex} className="max-w-[360px] whitespace-normal break-words px-3 py-2 align-top">
                   {cell}
                 </td>
               ))}

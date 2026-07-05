@@ -21,6 +21,7 @@ export type ApiKey = {
   id: number;
   client_id: number;
   name: string;
+  key: string | null;
   key_prefix: string;
   status: string;
   access_config: Record<string, JsonValue>;

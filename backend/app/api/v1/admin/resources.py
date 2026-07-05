@@ -75,6 +75,7 @@ async def create_api_key(payload: ApiKeyCreate, session: AsyncSession = Depends(
             "name": payload.name,
             "key_prefix": prefix,
             "key_hash": hash_api_key(raw_key),
+            "key_value": raw_key,
             "expires_at": payload.expires_at,
             "access_config": payload.access_config,
             "status": "active",

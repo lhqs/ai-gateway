@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   name VARCHAR(128) NOT NULL,
   key_prefix VARCHAR(32) NOT NULL,
   key_hash VARCHAR(128) NOT NULL UNIQUE,
+  key_value TEXT,
   status VARCHAR(32) NOT NULL DEFAULT 'active',
   access_config JSONB NOT NULL DEFAULT '{}'::jsonb,
   last_used_at TIMESTAMPTZ,

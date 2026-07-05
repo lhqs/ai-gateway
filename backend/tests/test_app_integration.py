@@ -83,6 +83,9 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
             },
         )
     ).json()
+    api_keys = (await client.get("/admin/api-keys")).json()
+    assert api_keys[0]["key"] == key_payload["key"]
+    assert "key_hash" not in api_keys[0]
     provider = (
         await client.post(
             "/admin/providers",
@@ -166,3 +169,73 @@ async def test_native_proxy_access_denied_through_app(app_client):
     assert response.status_code == 403
     assert logs[0]["call_mode"] == "native_proxy"
     assert logs[0]["error_code"] == "access_denied"
+
+
+@pytest.mark.asyncio
+async def test_chat_can_call_active_provider_model_without_alias(app_client, monkeypatch):
+    class Adapter:
+        async def chat_completion(self, provider, model, request):
+            assert request.model_alias == "deepseek-v4-flash"
+            assert request.provider_model == "deepseek-v4-flash"
+            return GatewayChatResponse(
+                body={
+                    "id": "chatcmpl-direct-model",
+                    "object": "chat.completion",
+                    "model": model.name,
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+                prompt_tokens=1,
+                completion_tokens=1,
+                total_tokens=2,
+                usage_status="parsed",
+            )
+
+    from app.services import provider_service
+
+    monkeypatch.setattr(provider_service.registry, "get_chat", lambda provider_type: Adapter())
+
+    client = app_client
+    created_client = (await client.post("/admin/clients", json={"name": "direct-client"})).json()
+    key_payload = (
+        await client.post(
+            "/admin/api-keys",
+            json={
+                "client_id": created_client["id"],
+                "name": "direct-key",
+                "access_config": {"model_aliases": ["*"], "provider_names": ["openai"]},
+            },
+        )
+    ).json()
+    provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "openai",
+                "provider_type": "openai_compatible",
+                "base_url": "https://example.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+    await client.post(
+        "/admin/models",
+        json={
+            "provider_id": provider["id"],
+            "name": "deepseek-v4-flash",
+            "capabilities": ["chat"],
+            "status": "active",
+        },
+    )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key_payload['key']}"},
+        json={"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    logs = (await client.get("/admin/usage-logs")).json()
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl-direct-model"
+    assert logs[0]["model_alias"] == "deepseek-v4-flash"
+    assert logs[0]["final_model_id"] is not None

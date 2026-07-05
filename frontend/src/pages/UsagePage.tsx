@@ -34,36 +34,40 @@ export function UsagePage({ headers, setNotice }: PageProps) {
         </div>
       </Section>
       <Section title="Usage Logs" action={<Button onClick={load} variant="light"><RefreshCw size={15} />Refresh</Button>}>
-        <table className="w-full border-collapse text-left text-sm">
-          <thead className="bg-panel text-slate-600">
-            <tr>{["Request", "Mode", "Target", "Status", "Usage", "Tokens", "Latency", "Cache", "Failover", ""].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {usage.map((row) => (
-              <React.Fragment key={row.id}>
-                <tr className="border-t border-line">
-                  <td className="px-3 py-2 font-mono text-xs">{row.request_id.slice(0, 12)}</td>
-                  <td className="px-3 py-2">{row.call_mode}</td>
-                  <td className="px-3 py-2">{row.model_alias || row.native_path}</td>
-                  <td className="px-3 py-2"><Badge tone={row.status === "success" ? "good" : "bad"}>{row.status}</Badge></td>
-                  <td className="px-3 py-2">{row.usage_status}</td>
-                  <td className="px-3 py-2">{row.total_tokens}</td>
-                  <td className="px-3 py-2">{row.latency_ms ?? 0} ms</td>
-                  <td className="px-3 py-2">{row.cache_hit ? "yes" : "no"}</td>
-                  <td className="px-3 py-2">{row.failover_triggered ? `${row.failover_attempts}` : "no"}</td>
-                  <td className="px-3 py-2"><Button onClick={() => setOpenId(openId === row.id ? null : row.id)} variant="light">Details</Button></td>
-                </tr>
-                {openId === row.id && (
-                  <tr className="border-t border-line bg-panel">
-                    <td colSpan={10} className="p-3">
-                      <pre className="max-h-[420px] overflow-auto rounded-md bg-white p-3 text-xs">{JSON.stringify(row, null, 2)}</pre>
-                    </td>
+        <div className="max-w-full overflow-auto">
+          <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-sm">
+            <thead className="bg-panel text-slate-600">
+              <tr>{["Request", "Mode", "Target", "Status", "Usage", "Tokens", "Latency", "Cache", "Failover", ""].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {usage.map((row) => (
+                <React.Fragment key={row.id}>
+                  <tr className="border-t border-line">
+                    <td className="px-3 py-2 font-mono text-xs">{row.request_id.slice(0, 12)}</td>
+                    <td className="px-3 py-2">{row.call_mode}</td>
+                    <td className="break-words px-3 py-2">{row.model_alias || row.native_path}</td>
+                    <td className="px-3 py-2"><Badge tone={row.status === "success" ? "good" : "bad"}>{row.status}</Badge></td>
+                    <td className="px-3 py-2">{row.usage_status}</td>
+                    <td className="px-3 py-2">{row.total_tokens}</td>
+                    <td className="px-3 py-2">{row.latency_ms ?? 0} ms</td>
+                    <td className="px-3 py-2">{row.cache_hit ? "yes" : "no"}</td>
+                    <td className="px-3 py-2">{row.failover_triggered ? `${row.failover_attempts}` : "no"}</td>
+                    <td className="px-3 py-2"><Button onClick={() => setOpenId(openId === row.id ? null : row.id)} variant="light">Details</Button></td>
                   </tr>
-                )}
-              </React.Fragment>
-            ))}
-          </tbody>
-        </table>
+                  {openId === row.id && (
+                    <tr className="border-t border-line bg-panel">
+                      <td colSpan={10} className="max-w-0 p-3">
+                        <pre className="max-h-[420px] max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-white p-3 text-xs leading-5">
+                          {JSON.stringify(row, null, 2)}
+                        </pre>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Section>
     </div>
   );

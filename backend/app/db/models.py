@@ -40,10 +40,15 @@ class ApiKey(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     key_prefix: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     key_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    key_value: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     access_config: Mapped[dict[str, Any]] = mapped_column(JsonType, nullable=False, default=dict)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def key(self) -> str | None:
+        return self.key_value
 
 
 class Provider(Base, TimestampMixin):

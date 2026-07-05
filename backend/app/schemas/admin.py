@@ -43,6 +43,7 @@ class ApiKeyRead(BaseModel):
     id: int
     client_id: int
     name: str
+    key: str | None = None
     key_prefix: str
     status: str
     access_config: dict[str, Any]

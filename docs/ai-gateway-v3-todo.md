@@ -81,19 +81,19 @@ V3 要求“判断调用方是否有权限访问该 provider 或 native API”�
 实现：
 
 - 已新增 `GET /admin/api-keys`。
-- 返回 key prefix、client、状态、访问策略、过期时间、最后使用时间。
-- 不返回 key 明文和 key hash。
+- 返回完整 key、key prefix、client、状态、访问策略、过期时间、最后使用时间。
+- 不返回 key hash。
 
 需要完成：
 
 - 增加 `GET /admin/api-keys`。
-- 返回 key prefix、client_id、状态、过期时间、最后使用时间。
-- 不返回 key 明文和 key hash。
+- 返回完整 key、key prefix、client_id、状态、过期时间、最后使用时间。
+- 不返回 key hash。
 
 验收标准：
 
 - 前端 API Keys 页面可以加载列表。
-- 响应中不包含 `key_hash`。
+- 响应中包含完整 `key`，不包含 `key_hash`。
 
 ### P0-3 原生流式最大持续时间未实现
 
