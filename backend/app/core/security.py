@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ApiKey, Client
+from app.db.models import AdminUser, ApiKey, Client
 from app.repositories.api_keys import ApiKeyRepository
 from app.repositories.clients import ClientRepository
 
@@ -25,6 +25,11 @@ def generate_api_key() -> tuple[str, str]:
 class AuthContext:
     client: Client
     api_key: ApiKey
+
+
+@dataclass(slots=True)
+class AdminAuthContext:
+    user: AdminUser
 
 
 async def authenticate_api_key(session: AsyncSession, authorization: str | None) -> AuthContext:

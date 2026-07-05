@@ -2,6 +2,22 @@ export type Tab = "dashboard" | "workbench" | "clients" | "providers" | "models"
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
+export type AuthUser = {
+  id: number;
+  email: string;
+  username: string;
+  display_name: string | null;
+  status: string;
+};
+
+export type TokenResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  expires_in: number;
+  user: AuthUser;
+};
+
 export type Dashboard = {
   total_requests: number;
   success_rate: number;

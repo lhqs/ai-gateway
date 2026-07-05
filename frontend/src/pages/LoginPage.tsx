@@ -6,9 +6,10 @@ import { apiBase } from "../lib/api";
 export function LoginPage({
   onLogin
 }: {
-  onLogin: (params: { adminToken: string; apiBaseUrl: string }) => Promise<void>;
+  onLogin: (params: { account: string; password: string; apiBaseUrl: string }) => Promise<void>;
 }) {
-  const [adminToken, setAdminToken] = useState(localStorage.getItem("adminToken") || "");
+  const [account, setAccount] = useState("");
+  const [password, setPassword] = useState("");
   const [apiBaseUrl, setApiBaseUrl] = useState(apiBase());
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -18,7 +19,7 @@ export function LoginPage({
     setLoading(true);
     setError("");
     try {
-      await onLogin({ adminToken, apiBaseUrl: apiBaseUrl.replace(/\/$/, "") });
+      await onLogin({ account, password, apiBaseUrl: apiBaseUrl.replace(/\/$/, "") });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -34,7 +35,7 @@ export function LoginPage({
             <ShieldCheck size={24} className="text-accent" />
             <h1 className="text-xl font-semibold">LHQS AI Gateway</h1>
           </div>
-          <p className="mt-2 text-sm text-slate-600">Sign in with the backend admin token.</p>
+          <p className="mt-2 text-sm text-slate-600">Sign in to the gateway admin console.</p>
         </div>
         <form onSubmit={submit} className="space-y-4 p-6">
           <label className="block">
@@ -48,13 +49,25 @@ export function LoginPage({
             />
           </label>
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Admin Token</span>
+            <span className="mb-1 block text-xs font-medium text-slate-600">Account</span>
             <input
-              value={adminToken}
-              onChange={(event) => setAdminToken(event.target.value)}
+              value={account}
+              onChange={(event) => setAccount(event.target.value)}
+              className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none focus:border-accent"
+              placeholder="admin@example.com"
+              autoComplete="username"
+              required
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-slate-600">Password</span>
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
               className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none focus:border-accent"
               type="password"
-              placeholder="change-me-admin-token"
+              placeholder="Password"
+              autoComplete="current-password"
               required
             />
           </label>

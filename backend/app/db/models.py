@@ -51,6 +51,51 @@ class ApiKey(Base, TimestampMixin):
         return self.key_value
 
 
+class AdminUser(Base, TimestampMixin):
+    __tablename__ = "admin_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdminSession(Base, TimestampMixin):
+    __tablename__ = "admin_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    refresh_token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    resource_type: Mapped[str | None] = mapped_column(String(64), index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JsonType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class Provider(Base, TimestampMixin):
     __tablename__ = "providers"
 

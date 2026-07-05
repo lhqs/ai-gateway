@@ -5,11 +5,13 @@ import pytest
 import respx
 from fastapi import Depends, Header, HTTPException
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.deps import get_auth_context, get_redis, require_admin, session_dep
+from app.core.config import get_settings
 from app.core.security import authenticate_api_key
-from app.db.models import Base
+from app.db.models import AdminUser, Base
 from app.main import create_app
 from app.schemas.chat import GatewayChatResponse
 
@@ -51,6 +53,256 @@ async def app_client(monkeypatch):
         yield client
 
     await engine.dispose()
+
+
+@pytest.fixture
+async def auth_app_client(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-bootstrap-token")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt-secret-key-with-at-least-32-bytes")
+    get_settings.cache_clear()
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async def override_session():
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except HTTPException:
+                await session.commit()
+                raise
+            except Exception:
+                await session.rollback()
+                raise
+
+    async def override_auth(
+        session=Depends(override_session), authorization: str | None = Header(default=None)
+    ):
+        return await authenticate_api_key(session, authorization)
+
+    app = create_app()
+    app.dependency_overrides[session_dep] = override_session
+    app.dependency_overrides[get_auth_context] = override_auth
+    app.dependency_overrides[get_redis] = lambda: None
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client, session_factory
+
+    get_settings.cache_clear()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_auth_register_login_and_access_admin_api(auth_app_client):
+    client, _ = auth_app_client
+
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "email": "admin@example.com",
+            "username": "admin",
+            "password": "Password123",
+            "display_name": "Admin",
+        },
+    )
+    assert register_response.status_code == 201
+    assert register_response.json()["status"] == "active"
+    assert "role" not in register_response.json()
+
+    login_response = await client.post(
+        "/auth/login", json={"account": "admin@example.com", "password": "Password123"}
+    )
+    payload = login_response.json()
+    assert login_response.status_code == 200
+    assert payload["token_type"] == "bearer"
+    assert payload["access_token"]
+    assert payload["refresh_token"]
+
+    dashboard_response = await client.get(
+        "/admin/dashboard", headers={"Authorization": f"Bearer {payload['access_token']}"}
+    )
+    assert dashboard_response.status_code == 200
+
+    legacy_token_response = await client.get(
+        "/admin/dashboard", headers={"Authorization": "Bearer test-bootstrap-token"}
+    )
+    assert legacy_token_response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_auth_register_requires_bootstrap_after_first_user(auth_app_client):
+    client, _ = auth_app_client
+
+    await client.post(
+        "/auth/register",
+        json={
+            "email": "admin@example.com",
+            "username": "admin",
+            "password": "Password123",
+            "display_name": "Admin",
+        },
+    )
+
+    blocked_response = await client.post(
+        "/auth/register",
+        json={
+            "email": "ops@example.com",
+            "username": "ops",
+            "password": "Password123",
+            "display_name": "Ops",
+        },
+    )
+    assert blocked_response.status_code == 401
+
+    created_response = await client.post(
+        "/auth/register",
+        headers={"Authorization": "Bearer test-bootstrap-token"},
+        json={
+            "email": "ops@example.com",
+            "username": "ops",
+            "password": "Password123",
+            "display_name": "Ops",
+        },
+    )
+    assert created_response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_admin_auth_refresh_rotation_and_logout(auth_app_client):
+    client, _ = auth_app_client
+    await client.post(
+        "/auth/register",
+        json={
+            "email": "admin@example.com",
+            "username": "admin",
+            "password": "Password123",
+            "display_name": "Admin",
+        },
+    )
+    login_payload = (
+        await client.post(
+            "/auth/login", json={"account": "admin", "password": "Password123"}
+        )
+    ).json()
+
+    refresh_response = await client.post(
+        "/auth/refresh", json={"refresh_token": login_payload["refresh_token"]}
+    )
+    refresh_payload = refresh_response.json()
+    assert refresh_response.status_code == 200
+    assert refresh_payload["refresh_token"] != login_payload["refresh_token"]
+
+    reused_response = await client.post(
+        "/auth/refresh", json={"refresh_token": login_payload["refresh_token"]}
+    )
+    assert reused_response.status_code == 401
+
+    logout_response = await client.post(
+        "/auth/logout", json={"refresh_token": refresh_payload["refresh_token"]}
+    )
+    assert logout_response.status_code == 204
+
+    after_logout_response = await client.post(
+        "/auth/refresh", json={"refresh_token": refresh_payload["refresh_token"]}
+    )
+    assert after_logout_response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_auth_change_password_invalidates_existing_tokens(auth_app_client):
+    client, _ = auth_app_client
+    await client.post(
+        "/auth/register",
+        json={
+            "email": "admin@example.com",
+            "username": "admin",
+            "password": "Password123",
+            "display_name": "Admin",
+        },
+    )
+    login_payload = (
+        await client.post(
+            "/auth/login", json={"account": "admin", "password": "Password123"}
+        )
+    ).json()
+    headers = {"Authorization": f"Bearer {login_payload['access_token']}"}
+
+    change_response = await client.post(
+        "/auth/change-password",
+        headers=headers,
+        json={"old_password": "Password123", "new_password": "NewPassword123"},
+    )
+    assert change_response.status_code == 204
+
+    me_response = await client.get("/auth/me", headers=headers)
+    assert me_response.status_code == 401
+
+    old_login_response = await client.post(
+        "/auth/login", json={"account": "admin", "password": "Password123"}
+    )
+    assert old_login_response.status_code == 401
+
+    new_login_response = await client.post(
+        "/auth/login", json={"account": "admin", "password": "NewPassword123"}
+    )
+    assert new_login_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_auth_disabled_user_cannot_keep_using_access_token(auth_app_client):
+    client, session_factory = auth_app_client
+    await client.post(
+        "/auth/register",
+        json={
+            "email": "admin@example.com",
+            "username": "admin",
+            "password": "Password123",
+            "display_name": "Admin",
+        },
+    )
+    login_payload = (
+        await client.post(
+            "/auth/login", json={"account": "admin", "password": "Password123"}
+        )
+    ).json()
+
+    async with session_factory() as session:
+        await session.execute(update(AdminUser).values(status="disabled"))
+        await session.commit()
+
+    response = await client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {login_payload['access_token']}"}
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_access_token_does_not_authenticate_gateway_calls(auth_app_client):
+    client, _ = auth_app_client
+    await client.post(
+        "/auth/register",
+        json={
+            "email": "admin@example.com",
+            "username": "admin",
+            "password": "Password123",
+            "display_name": "Admin",
+        },
+    )
+    login_payload = (
+        await client.post(
+            "/auth/login", json={"account": "admin", "password": "Password123"}
+        )
+    ).json()
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {login_payload['access_token']}"},
+        json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid API key"
 
 
 @pytest.mark.asyncio

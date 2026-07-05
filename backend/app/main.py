@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
-from app.api.v1 import chat, proxy
+from app.api.v1 import auth, chat, proxy
 from app.api.v1.admin import resources, workbench
 from app.core.config import get_settings
 
@@ -36,6 +36,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(chat.router, prefix="/v1", tags=["chat"])
     app.include_router(proxy.router, prefix="/proxy", tags=["native-proxy"])
+    app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(resources.router, prefix="/admin", tags=["admin"])
     app.include_router(workbench.router, prefix="/admin/workbench", tags=["admin-workbench"])
 

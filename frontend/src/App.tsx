@@ -10,19 +10,17 @@ import { RoutesPage } from "./pages/RoutesPage";
 import { UsagePage } from "./pages/UsagePage";
 import { LoginPage } from "./pages/LoginPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
-import { api, apiBase } from "./lib/api";
+import { api, apiBase, authHeaders, clearAuth, readAuthUser, saveAuth } from "./lib/api";
 import { isKnownPath, tabFromPath, tabPaths } from "./lib/routes";
-import type { Tab } from "./types/gateway";
+import type { AuthUser, Tab, TokenResponse } from "./types/gateway";
 
 export function App() {
   const [tab, setTab] = useState<Tab>(() => tabFromPath(window.location.pathname));
-  const [adminToken, setAdminToken] = useState(localStorage.getItem("adminToken") || "");
-  const [authenticated, setAuthenticated] = useState(Boolean(localStorage.getItem("adminToken")));
+  const [accessToken, setAccessToken] = useState(localStorage.getItem("accessToken") || "");
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => readAuthUser());
+  const [authenticated, setAuthenticated] = useState(Boolean(localStorage.getItem("accessToken")));
   const [notice, setNotice] = useState("");
-  const headers = useMemo(
-    () => ({ Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" }),
-    [adminToken]
-  );
+  const headers = useMemo(() => authHeaders(accessToken), [accessToken]);
 
   useEffect(() => {
     function syncTabWithLocation() {
@@ -42,18 +40,50 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (authenticated && adminToken) {
-      localStorage.setItem("adminToken", adminToken);
+    function handleAuthUpdated(event: Event) {
+      const detail = (event as CustomEvent<TokenResponse>).detail;
+      setAccessToken(detail.access_token);
+      setCurrentUser(detail.user);
+      setAuthenticated(true);
     }
-  }, [adminToken, authenticated]);
 
-  async function login({ adminToken, apiBaseUrl }: { adminToken: string; apiBaseUrl: string }) {
+    function handleAuthCleared() {
+      setAccessToken("");
+      setCurrentUser(null);
+      setAuthenticated(false);
+    }
+
+    window.addEventListener("auth:updated", handleAuthUpdated);
+    window.addEventListener("auth:cleared", handleAuthCleared);
+    return () => {
+      window.removeEventListener("auth:updated", handleAuthUpdated);
+      window.removeEventListener("auth:cleared", handleAuthCleared);
+    };
+  }, []);
+
+  async function login({
+    account,
+    password,
+    apiBaseUrl
+  }: {
+    account: string;
+    password: string;
+    apiBaseUrl: string;
+  }) {
     localStorage.setItem("apiBase", apiBaseUrl);
-    await api("/admin/dashboard", {
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" }
-    }, setNotice);
-    localStorage.setItem("adminToken", adminToken);
-    setAdminToken(adminToken);
+    const payload = await api<TokenResponse>(
+      "/auth/login",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account, password })
+      },
+      setNotice,
+      false
+    );
+    saveAuth(payload);
+    setAccessToken(payload.access_token);
+    setCurrentUser(payload.user);
     setAuthenticated(true);
     setNotice(`Connected to ${apiBase()}`);
   }
@@ -65,10 +95,25 @@ export function App() {
     setTab(tabFromPath(path));
   }
 
-  function logout() {
-    localStorage.removeItem("adminToken");
-    setAdminToken("");
-    setAuthenticated(false);
+  async function logout() {
+    const refreshToken = localStorage.getItem("refreshToken");
+    if (refreshToken && accessToken) {
+      try {
+        await api<unknown>(
+          "/auth/logout",
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ refresh_token: refreshToken })
+          },
+          setNotice,
+          false
+        );
+      } catch {
+        // Local logout should still complete if the session is already expired server-side.
+      }
+    }
+    clearAuth();
     setNotice("");
   }
 
@@ -80,7 +125,7 @@ export function App() {
     <AppLayout
       tab={tab}
       onNavigate={navigate}
-      notice={notice}
+      notice={notice || (currentUser ? currentUser.username : "")}
       onLogout={logout}
     >
       {tab === "dashboard" && <DashboardPage headers={headers} setNotice={setNotice} />}

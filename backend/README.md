@@ -11,6 +11,7 @@ cp .env.example .env
 psql "$POSTGRES_DSN" -f app/db/sql/001_initial_schema.sql
 psql "$POSTGRES_DSN" -f app/db/sql/002_seed_dev.sql
 psql "$POSTGRES_DSN" -f app/db/sql/003_access_config.sql
+psql "$POSTGRES_DSN" -f app/db/sql/007_admin_users.sql
 uv run uvicorn app.main:app --reload
 ```
 
@@ -19,7 +20,11 @@ Important environment variables:
 - `DATABASE_URL`: PostgreSQL async SQLAlchemy URL used by the backend.
 - `POSTGRES_DSN`: PostgreSQL sync URL used by `psql` when applying SQL scripts.
 - `REDIS_URL`: Redis URL for rate limiting and response cache.
-- `ADMIN_TOKEN`: bearer token for `/admin/*`.
+- `ADMIN_TOKEN`: bootstrap bearer token for creating admin users after the first user exists.
+- `JWT_SECRET_KEY`: secret used to sign admin access tokens.
+- `JWT_ALGORITHM`: JWT signing algorithm, defaults to `HS256`.
+- `ACCESS_TOKEN_EXPIRE_MINUTES`: admin access token lifetime.
+- `REFRESH_TOKEN_EXPIRE_DAYS`: admin refresh token lifetime.
 - `REQUEST_BODY_LIMIT_BYTES`: native proxy request body limit.
 - `NATIVE_STREAM_MAX_SECONDS`: native streaming connection duration limit.
 - `DEFAULT_RATE_LIMIT_PER_MINUTE`: fallback Redis rate limit.
