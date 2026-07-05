@@ -46,6 +46,25 @@ from app.schemas.usage import UsageLogPage
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 
+def _usage_filters(
+    *,
+    call_mode: str | None = None,
+    native_path: str | None = None,
+    status_filter: str | None = None,
+    usage_status: str | None = None,
+    cache_hit: bool | None = None,
+    failover_triggered: bool | None = None,
+) -> dict[str, Any]:
+    return {
+        "call_mode": call_mode,
+        "native_path": native_path,
+        "status": status_filter,
+        "usage_status": usage_status,
+        "cache_hit": cache_hit,
+        "failover_triggered": failover_triggered,
+    }
+
+
 async def _patch(repo: Repository, item_id: int, data: dict[str, Any]):
     item = await repo.get(item_id)
     if not item:
@@ -303,28 +322,24 @@ async def delete_route_rule(item_id: int, session: AsyncSession = Depends(sessio
 
 @router.get("/usage-logs", response_model=UsageLogPage)
 async def list_usage_logs(
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     call_mode: str | None = None,
-    client_id: int | None = None,
-    model_alias: str | None = None,
-    provider_id: int | None = None,
     native_path: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
+    usage_status: str | None = None,
     cache_hit: bool | None = None,
     failover_triggered: bool | None = None,
     session: AsyncSession = Depends(session_dep),
 ):
-    filters = {
-        "call_mode": call_mode,
-        "client_id": client_id,
-        "model_alias": model_alias,
-        "provider_id": provider_id,
-        "native_path": native_path,
-        "status": status_filter,
-        "cache_hit": cache_hit,
-        "failover_triggered": failover_triggered,
-    }
+    filters = _usage_filters(
+        call_mode=call_mode,
+        native_path=native_path,
+        status_filter=status_filter,
+        usage_status=usage_status,
+        cache_hit=cache_hit,
+        failover_triggered=failover_triggered,
+    )
     repo = UsageLogRepository(session)
     return {
         "items": await repo.list_recent(limit=limit, offset=offset, filters=filters),

@@ -304,11 +304,21 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
         json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
     )
     logs = (await client.get("/admin/usage-logs")).json()["items"]
+    filtered = (
+        await client.get(
+            "/admin/usage-logs",
+            params={
+                "usage_status": "parsed",
+            },
+        )
+    ).json()
 
     assert response.status_code == 200
     assert response.json()["id"] == "chatcmpl-test"
     assert logs[0]["call_mode"] == "unified_chat"
     assert logs[0]["prompt_content"]["messages"][0]["content"] == "hi"
+    assert filtered["total"] == 1
+    assert filtered["items"][0]["usage_status"] == "parsed"
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,10 @@ class OpenAICompatibleAdapter:
     def _body(self, model: Model, request: GatewayChatRequest) -> dict:
         body = dict(request.body)
         body["model"] = model.name
+        if request.stream and provider_stream_usage_enabled(body):
+            stream_options = dict(body.get("stream_options") or {})
+            stream_options.setdefault("include_usage", True)
+            body["stream_options"] = stream_options
         return body
 
     def _url(self, provider: Provider) -> str:
@@ -96,7 +100,8 @@ class OpenAICompatibleAdapter:
                             continue
                         data = line if line.startswith("data:") else f"data: {line}"
                         payload = f"{data}\n\n".encode("utf-8")
-                        yield GatewayChatChunk(data=payload, first_token=first)
+                        chunk = self._parse_stream_line(data)
+                        yield GatewayChatChunk(data=payload, first_token=first, **chunk)
                         first = False
         except httpx.TimeoutException as exc:
             raise ProviderCallError("Provider stream timed out", error_type="timeout") from exc
@@ -104,3 +109,38 @@ class OpenAICompatibleAdapter:
             raise ProviderCallError("Provider stream connection failed", error_type="connection_error") from exc
         except json.JSONDecodeError as exc:
             raise ProviderCallError("Provider stream returned invalid JSON", error_type="provider_error") from exc
+
+    def _parse_stream_line(self, line: str) -> dict:
+        raw = line.removeprefix("data:").strip()
+        if not raw or raw == "[DONE]":
+            return {}
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+
+        result: dict = {}
+        choices = payload.get("choices") or []
+        if choices:
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content")
+            if isinstance(content, str):
+                result["completion_delta"] = content
+
+        usage = OpenAIUsageParser().parse(payload)
+        if usage.usage_status == "parsed":
+            result.update(
+                {
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                    "total_tokens": usage.total_tokens,
+                    "raw_usage": usage.raw_usage,
+                    "usage_status": usage.usage_status,
+                }
+            )
+        return result
+
+
+def provider_stream_usage_enabled(body: dict) -> bool:
+    config = body.get("stream_options")
+    return not (isinstance(config, dict) and config.get("include_usage") is False)

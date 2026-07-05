@@ -11,6 +11,7 @@ type UsageFilter = {
   call_mode: string;
   status: string;
   native_path: string;
+  usage_status: string;
   cache_hit: string;
   failover_triggered: string;
 };
@@ -19,6 +20,7 @@ const defaultFilter: UsageFilter = {
   call_mode: "",
   status: "",
   native_path: "",
+  usage_status: "",
   cache_hit: "",
   failover_triggered: ""
 };
@@ -40,14 +42,19 @@ export function UsagePage({ headers, setNotice }: PageProps) {
   const [filter, setFilter] = useState<UsageFilter>(defaultFilter);
   const [openId, setOpenId] = useState<number | null>(null);
 
+  function appendFilterParams(params: URLSearchParams, values = filter) {
+    Object.entries(values).forEach(([key, value]) => {
+      if (!value) return;
+      params.set(key, value);
+    });
+  }
+
   function usageParams(page = usagePage, values = filter) {
     const params = new URLSearchParams({
       limit: String(PAGE_SIZE),
       offset: String((page - 1) * PAGE_SIZE)
     });
-    Object.entries(values).forEach(([key, value]) => {
-      if (value) params.set(key, value);
-    });
+    appendFilterParams(params, values);
     return params.toString();
   }
 
@@ -86,8 +93,7 @@ export function UsagePage({ headers, setNotice }: PageProps) {
     <div className="space-y-5">
       <section className="rounded-md border border-line bg-white px-4 py-3">
         <div className="overflow-x-auto">
-          <div className="flex min-w-[1040px] items-center gap-3">
-            <h3 className="mr-1 text-sm font-semibold">Filters</h3>
+          <div className="flex min-w-[1180px] items-center gap-3">
             <label className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-600">Mode</span>
               <Select
@@ -109,6 +115,20 @@ export function UsagePage({ headers, setNotice }: PageProps) {
               >
                 <option value="">Any</option>
                 <option value="success">success</option>
+                <option value="failed">failed</option>
+              </Select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="whitespace-nowrap text-xs font-medium text-slate-600">Usage</span>
+              <Select
+                value={filter.usage_status}
+                onChange={(event) => setFilter({ ...filter, usage_status: event.target.value })}
+                className="w-32"
+              >
+                <option value="">Any</option>
+                <option value="parsed">parsed</option>
+                <option value="estimated">estimated</option>
+                <option value="unknown">unknown</option>
                 <option value="failed">failed</option>
               </Select>
             </label>

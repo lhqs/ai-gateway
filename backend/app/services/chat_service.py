@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ProviderCallError
 from app.core.security import AuthContext
 from app.db.models import Model, Provider
+from app.repositories.cache_entries import CacheEntryRepository
 from app.schemas.chat import ChatCompletionRequest, GatewayChatRequest, GatewayChatResponse
 from app.services.cache_service import CacheService
 from app.services.access_policy_service import AccessPolicyService
@@ -115,7 +117,7 @@ class ChatService:
                     failure_reason=failure_reason,
                 )
                 if cache_key and request_hash:
-                    await self.cache.set_json(
+                    cache_written = await self.cache.set_json(
                         cache_key,
                         {
                             "body": response.body,
@@ -126,6 +128,19 @@ class ChatService:
                         },
                         route.rule.cache_ttl_seconds,
                     )
+                    if cache_written and self.session:
+                        await CacheEntryRepository(self.session).upsert_metadata(
+                            cache_key=cache_key,
+                            client_id=auth.client.id,
+                            model_alias=payload.model,
+                            request_hash=request_hash,
+                            response_body=response.body,
+                            prompt_tokens=response.prompt_tokens,
+                            completion_tokens=response.completion_tokens,
+                            total_tokens=response.total_tokens,
+                            expires_at=datetime.now(timezone.utc)
+                            + timedelta(seconds=route.rule.cache_ttl_seconds),
+                        )
                 return response.body
             except ProviderCallError as exc:
                 last_error = exc
@@ -186,6 +201,12 @@ class ChatService:
         emitted = False
         failure_reason = None
         for attempt_index, (model, provider) in enumerate(attempts):
+            completion_parts: list[str] = []
+            raw_usage: dict[str, Any] | None = None
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            usage_status = "unknown"
             gw_request = GatewayChatRequest(
                 request_id=request_id,
                 model_alias=payload.model,
@@ -199,6 +220,14 @@ class ChatService:
                     emitted = True
                     if chunk.first_token and first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
+                    if chunk.completion_delta and len("".join(completion_parts)) < 20000:
+                        completion_parts.append(chunk.completion_delta)
+                    if chunk.usage_status == "parsed":
+                        prompt_tokens = chunk.prompt_tokens
+                        completion_tokens = chunk.completion_tokens
+                        total_tokens = chunk.total_tokens
+                        raw_usage = chunk.raw_usage
+                        usage_status = chunk.usage_status
                     yield chunk.data
                 await self.usage.record(
                     request_id=request_id,
@@ -208,11 +237,16 @@ class ChatService:
                     model_id=model.id,
                     stream=True,
                     status="success",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
                     latency_ms=int((time.perf_counter() - started) * 1000),
                     first_token_latency_ms=first_token_ms,
                     call_mode="unified_chat",
-                    usage_status="unknown",
+                    usage_status=usage_status,
+                    raw_usage=raw_usage,
                     prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                    completion_content={"content": "".join(completion_parts)} if completion_parts else None,
                     failover_triggered=attempt_index > 0,
                     failover_attempts=attempt_index,
                     initial_provider_id=route.provider.id,

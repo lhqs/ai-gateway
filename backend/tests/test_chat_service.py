@@ -1,9 +1,12 @@
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.errors import ProviderCallError
 from app.core.security import AuthContext
-from app.db.models import ApiKey, Client, Model, ModelAlias, Provider, RouteRule
+from app.db.models import ApiKey, Base, CacheEntry, Client, Model, ModelAlias, Provider, RouteRule
 from app.schemas.chat import ChatCompletionRequest, ChatMessage, GatewayChatChunk, GatewayChatResponse
+from app.providers.openai_compatible import OpenAICompatibleAdapter
 from app.services.cache_service import CacheService
 from app.services.chat_service import ChatService
 
@@ -18,6 +21,7 @@ class MemoryCache(CacheService):
 
     async def set_json(self, cache_key, value, ttl_seconds):
         self.values[cache_key] = value
+        return True
 
 
 class FakeRouting:
@@ -97,12 +101,57 @@ class FakeStreamProviderService:
         yield GatewayChatChunk(data=b"data: ok\n\n", first_token=True)
 
 
+class FakeUsageStreamProviderService:
+    async def stream_chat_completion(self, provider, model, request):
+        yield GatewayChatChunk(data=b"data: token\n\n", first_token=True, completion_delta="done")
+        yield GatewayChatChunk(
+            data=b"data: usage\n\n",
+            prompt_tokens=4,
+            completion_tokens=5,
+            total_tokens=9,
+            raw_usage={"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9},
+            usage_status="parsed",
+        )
+
+
 class FakeUsage:
     def __init__(self):
         self.records = []
 
     async def record(self, **data):
         self.records.append(data)
+
+
+def test_openai_stream_parser_extracts_usage_and_enables_stream_options():
+    adapter = OpenAICompatibleAdapter()
+    provider = Provider(
+        id=1,
+        name="openai",
+        provider_type="openai_compatible",
+        base_url="https://example.test",
+        status="active",
+    )
+    model = Model(id=1, provider_id=1, name="gpt-test", status="active")
+    request = ChatCompletionRequest(
+        model="default-chat",
+        messages=[ChatMessage(role="user", content="hello")],
+        stream=True,
+    )
+    body = adapter._body(
+        model,
+        request=type(
+            "Request",
+            (),
+            {"body": request.model_dump(exclude_none=True), "stream": True},
+        )(),
+    )
+    parsed = adapter._parse_stream_line(
+        'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}'
+    )
+
+    assert body["stream_options"] == {"include_usage": True}
+    assert parsed["usage_status"] == "parsed"
+    assert parsed["total_tokens"] == 3
 
 
 @pytest.mark.asyncio
@@ -135,6 +184,55 @@ async def test_chat_service_failover_then_cache_hit():
 
 
 @pytest.mark.asyncio
+async def test_chat_service_persists_cache_metadata():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as session:
+        service = ChatService(session=session, cache=MemoryCache())
+        routing = FakeRouting()
+        routing.rule.fallback_model_ids = []
+        service.routing = routing
+
+        class ProviderService:
+            async def chat_completion(self, provider, model, request):
+                return GatewayChatResponse(
+                    body={"id": "cached", "choices": [{"message": {"content": "ok"}}]},
+                    prompt_tokens=2,
+                    completion_tokens=3,
+                    total_tokens=5,
+                    raw_usage={"total_tokens": 5},
+                    usage_status="parsed",
+                )
+
+        service.provider_service = ProviderService()
+        service.usage = FakeUsage()
+        auth = AuthContext(
+            client=Client(id=1, name="client", status="active"),
+            api_key=ApiKey(id=1, client_id=1, name="key", key_prefix="p", key_hash="h", status="active"),
+        )
+        payload = ChatCompletionRequest(
+            model="default-chat",
+            messages=[ChatMessage(role="user", content="hello")],
+            stream=False,
+        )
+
+        await service.complete(auth, "req-cache", payload)
+        item = await session.scalar(select(CacheEntry))
+
+        assert item is not None
+        assert item.model_alias == "default-chat"
+        assert item.prompt_tokens == 2
+        assert item.completion_tokens == 3
+        assert item.total_tokens == 5
+        assert item.response_body["id"] == "cached"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_chat_service_stream_failover_before_first_token():
     service = ChatService(session=None, cache=MemoryCache())  # type: ignore[arg-type]
     service.routing = FakeRouting()
@@ -159,3 +257,32 @@ async def test_chat_service_stream_failover_before_first_token():
     assert any(record["status"] == "failed" for record in usage.records)
     assert usage.records[-1]["status"] == "success"
     assert usage.records[-1]["failover_triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_chat_service_stream_records_usage_and_completion_summary():
+    service = ChatService(session=None, cache=MemoryCache())  # type: ignore[arg-type]
+    routing = FakeRouting()
+    routing.rule.fallback_model_ids = []
+    service.routing = routing
+    service.provider_service = FakeUsageStreamProviderService()
+    usage = FakeUsage()
+    service.usage = usage
+    auth = AuthContext(
+        client=Client(id=1, name="client", status="active"),
+        api_key=ApiKey(id=1, client_id=1, name="key", key_prefix="p", key_hash="h", status="active"),
+    )
+    payload = ChatCompletionRequest(
+        model="default-chat",
+        messages=[ChatMessage(role="user", content="hello")],
+        stream=True,
+    )
+
+    chunks = [chunk async for chunk in service.complete_stream(auth, "req-stream-usage", payload)]
+
+    assert chunks == [b"data: token\n\n", b"data: usage\n\n"]
+    assert usage.records[-1]["usage_status"] == "parsed"
+    assert usage.records[-1]["prompt_tokens"] == 4
+    assert usage.records[-1]["completion_tokens"] == 5
+    assert usage.records[-1]["total_tokens"] == 9
+    assert usage.records[-1]["completion_content"] == {"content": "done"}

@@ -39,7 +39,8 @@ class CacheService:
             return None
         return json.loads(value)
 
-    async def set_json(self, cache_key: str, value: dict[str, Any], ttl_seconds: int) -> None:
+    async def set_json(self, cache_key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
         if not self.redis:
-            return
+            return False
         await self.redis.set(cache_key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
+        return True
