@@ -43,6 +43,22 @@ Example:
 }
 ```
 
+## OpenAI-compatible provider request body config
+
+`providers.config` can force top-level request body changes before forwarding unified
+`/v1/chat/completions` calls to OpenAI-compatible providers.
+
+Example for disabling DeepSeek thinking while removing the client-supplied reasoning effort:
+
+```json
+{
+  "request_body_remove_fields": ["reasoning_effort"],
+  "request_body_overrides": {
+    "thinking": {"type": "disabled"}
+  }
+}
+```
+
 ## Verify
 
 ```bash

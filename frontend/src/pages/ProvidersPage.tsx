@@ -24,6 +24,7 @@ type ProviderForm = {
   provider_type: string;
   base_url: string;
   encrypted_api_key: string;
+  config: string;
   protocol_modes: string;
   auth_type: string;
   auth_config: string;
@@ -42,6 +43,7 @@ function defaultProviderForm(): ProviderForm {
     provider_type: "gemini",
     base_url: "https://generativelanguage.googleapis.com",
     encrypted_api_key: "",
+    config: "{}",
     protocol_modes: "native_proxy",
     auth_type: "api_key_query",
     auth_config: '{"query_name":"key"}',
@@ -61,6 +63,7 @@ function providerFormFromProvider(provider: Provider): ProviderForm {
     provider_type: provider.provider_type,
     base_url: provider.base_url,
     encrypted_api_key: "",
+    config: JSON.stringify(provider.config || {}),
     protocol_modes: provider.protocol_modes.join(", "),
     auth_type: provider.auth_type,
     auth_config: JSON.stringify(provider.auth_config || {}),
@@ -82,6 +85,7 @@ function providerPayload(form: ProviderForm) {
     provider_type: form.provider_type,
     base_url: form.base_url,
     encrypted_api_key: form.encrypted_api_key || null,
+    config: JSON.parse(form.config || "{}"),
     protocol_modes: parseCsv(form.protocol_modes),
     auth_type: form.auth_type,
     auth_config: JSON.parse(form.auth_config || "{}"),
@@ -143,7 +147,7 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
     try {
       payload = providerPayload(form);
     } catch {
-      setNotice("Auth Config JSON is invalid");
+      setNotice("Provider/Auth JSON config is invalid");
       return;
     }
 
@@ -296,6 +300,14 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
                 <option value="bearer_token">bearer_token</option>
               </Select>
             </Field>
+            <div className="md:col-span-2">
+              <Field label="Provider Config JSON">
+                <TextArea
+                  value={form.config}
+                  onChange={(event) => setForm({ ...form, config: event.target.value })}
+                />
+              </Field>
+            </div>
             <div className="md:col-span-2">
               <Field label="Auth Config JSON">
                 <TextArea

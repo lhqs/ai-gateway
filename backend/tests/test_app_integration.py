@@ -151,6 +151,38 @@ async def test_admin_providers_pagination_and_delete_cleanup(app_client):
 
 
 @pytest.mark.asyncio
+async def test_admin_provider_patch_config_returns_refreshed_timestamps(app_client):
+    client = app_client
+    provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "deepseek",
+                "provider_type": "openai_compatible",
+                "base_url": "https://api.deepseek.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/admin/providers/{provider['id']}",
+        json={
+            "config": {
+                "request_body_remove_fields": ["reasoning_effort"],
+                "request_body_overrides": {"thinking": {"type": "disabled"}},
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["config"]["request_body_remove_fields"] == ["reasoning_effort"]
+    assert response.json()["config"]["request_body_overrides"]["thinking"] == {"type": "disabled"}
+    assert response.json()["updated_at"]
+
+
+@pytest.mark.asyncio
 async def test_admin_models_aliases_and_routes_pagination_and_delete(app_client):
     client = app_client
     provider = (

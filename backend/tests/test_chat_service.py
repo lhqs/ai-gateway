@@ -138,6 +138,7 @@ def test_openai_stream_parser_extracts_usage_and_enables_stream_options():
         stream=True,
     )
     body = adapter._body(
+        provider,
         model,
         request=type(
             "Request",
@@ -152,6 +153,42 @@ def test_openai_stream_parser_extracts_usage_and_enables_stream_options():
     assert body["stream_options"] == {"include_usage": True}
     assert parsed["usage_status"] == "parsed"
     assert parsed["total_tokens"] == 3
+
+
+def test_openai_body_config_can_disable_provider_thinking():
+    adapter = OpenAICompatibleAdapter()
+    provider = Provider(
+        id=1,
+        name="deepseek",
+        provider_type="openai_compatible",
+        base_url="https://example.test",
+        status="active",
+        config={
+            "request_body_remove_fields": ["reasoning_effort"],
+            "request_body_overrides": {"thinking": {"type": "disabled"}},
+        },
+    )
+    model = Model(id=1, provider_id=1, name="deepseek-v4-pro", status="active")
+    request = ChatCompletionRequest(
+        model="deepseek-v4-pro",
+        messages=[ChatMessage(role="user", content="hello")],
+        reasoning_effort="high",
+        thinking={"type": "enabled"},
+    )
+
+    body = adapter._body(
+        provider,
+        model,
+        request=type(
+            "Request",
+            (),
+            {"body": request.model_dump(exclude_none=True), "stream": False},
+        )(),
+    )
+
+    assert body["model"] == "deepseek-v4-pro"
+    assert body["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in body
 
 
 @pytest.mark.asyncio

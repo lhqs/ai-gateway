@@ -73,6 +73,7 @@ async def _patch(repo: Repository, item_id: int, data: dict[str, Any]):
         if value is not None:
             setattr(item, key, value)
     await repo.session.flush()
+    await repo.session.refresh(item)
     return item
 
 

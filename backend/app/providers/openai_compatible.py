@@ -24,13 +24,15 @@ class OpenAICompatibleAdapter:
         headers.update(provider.config.get("headers") or {})
         return headers
 
-    def _body(self, model: Model, request: GatewayChatRequest) -> dict:
+    def _body(self, provider: Provider, model: Model, request: GatewayChatRequest) -> dict:
         body = dict(request.body)
         body["model"] = model.name
         if request.stream and provider_stream_usage_enabled(body):
             stream_options = dict(body.get("stream_options") or {})
             stream_options.setdefault("include_usage", True)
             body["stream_options"] = stream_options
+        body = apply_provider_body_config(body, provider.config or {})
+        body["model"] = model.name
         return body
 
     def _url(self, provider: Provider) -> str:
@@ -43,7 +45,9 @@ class OpenAICompatibleAdapter:
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
-                    self._url(provider), headers=self._headers(provider), json=self._body(model, request)
+                    self._url(provider),
+                    headers=self._headers(provider),
+                    json=self._body(provider, model, request),
                 )
         except httpx.TimeoutException as exc:
             raise ProviderCallError("Provider request timed out", error_type="timeout") from exc
@@ -84,7 +88,7 @@ class OpenAICompatibleAdapter:
                     "POST",
                     self._url(provider),
                     headers=self._headers(provider),
-                    json=self._body(model, request),
+                    json=self._body(provider, model, request),
                 ) as response:
                     if response.status_code >= 400:
                         text = await response.aread()
@@ -144,3 +148,17 @@ class OpenAICompatibleAdapter:
 def provider_stream_usage_enabled(body: dict) -> bool:
     config = body.get("stream_options")
     return not (isinstance(config, dict) and config.get("include_usage") is False)
+
+
+def apply_provider_body_config(body: dict, provider_config: dict) -> dict:
+    remove_fields = provider_config.get("request_body_remove_fields") or []
+    if isinstance(remove_fields, list):
+        for field in remove_fields:
+            if isinstance(field, str):
+                body.pop(field, None)
+
+    overrides = provider_config.get("request_body_overrides") or {}
+    if isinstance(overrides, dict):
+        body.update(overrides)
+
+    return body
