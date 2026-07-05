@@ -68,7 +68,7 @@ export function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
   return (
     <textarea
       {...props}
-      className="min-h-24 w-full rounded-md border border-line px-3 py-2 font-mono text-sm outline-none focus:border-accent"
+      className={`min-h-24 w-full rounded-md border border-line px-3 py-2 font-mono text-sm outline-none focus:border-accent ${props.className || ""}`}
     />
   );
 }

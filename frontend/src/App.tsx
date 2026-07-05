@@ -8,6 +8,7 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { RoutesPage } from "./pages/RoutesPage";
 import { UsagePage } from "./pages/UsagePage";
 import { LoginPage } from "./pages/LoginPage";
+import { WorkbenchPage } from "./pages/WorkbenchPage";
 import { api, apiBase } from "./lib/api";
 import { isKnownPath, tabFromPath, tabPaths } from "./lib/routes";
 import type { Tab } from "./types/gateway";
@@ -82,6 +83,7 @@ export function App() {
       onLogout={logout}
     >
       {tab === "dashboard" && <DashboardPage headers={headers} setNotice={setNotice} />}
+      {tab === "workbench" && <WorkbenchPage headers={headers} setNotice={setNotice} />}
       {tab === "clients" && <ClientsPage headers={headers} setNotice={setNotice} />}
       {tab === "providers" && <ProvidersPage headers={headers} setNotice={setNotice} />}
       {tab === "models" && <ModelsPage headers={headers} setNotice={setNotice} />}

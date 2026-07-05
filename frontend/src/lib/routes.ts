@@ -2,6 +2,7 @@ import type { Tab } from "../types/gateway";
 
 export const tabPaths: Record<Tab, string> = {
   dashboard: "/dashboard",
+  workbench: "/workbench",
   clients: "/clients",
   providers: "/providers",
   models: "/models",

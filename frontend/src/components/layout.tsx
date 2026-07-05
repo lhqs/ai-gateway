@@ -1,4 +1,4 @@
-import { Activity, Database, ListFilter, LogOut, Route, ServerCog, Users } from "lucide-react";
+import { Activity, Bot, Database, ListFilter, LogOut, Route, ServerCog, Users } from "lucide-react";
 import type React from "react";
 
 import { tabPaths } from "../lib/routes";
@@ -6,6 +6,7 @@ import type { Tab } from "../types/gateway";
 
 export const nav: Array<{ key: Tab; label: string; path: string; icon: React.ComponentType<{ size?: number }> }> = [
   { key: "dashboard", label: "Dashboard", path: tabPaths.dashboard, icon: Activity },
+  { key: "workbench", label: "AI Workbench", path: tabPaths.workbench, icon: Bot },
   { key: "clients", label: "Clients & Keys", path: tabPaths.clients, icon: Users },
   { key: "providers", label: "Providers", path: tabPaths.providers, icon: ServerCog },
   { key: "models", label: "Models & Aliases", path: tabPaths.models, icon: Database },

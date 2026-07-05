@@ -1,4 +1,4 @@
-export type Tab = "dashboard" | "clients" | "providers" | "models" | "routes" | "usage";
+export type Tab = "dashboard" | "workbench" | "clients" | "providers" | "models" | "routes" | "usage";
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -115,6 +115,30 @@ export type UsageLog = {
   raw_request_body: unknown | null;
   raw_response_body: unknown | null;
   created_at: string;
+};
+
+export type WorkbenchChatTestMeta = {
+  usage_log_id: number | null;
+  latency_ms: number | null;
+  model_alias: string | null;
+  provider_id: number | null;
+  model_id: number | null;
+  final_provider_id: number | null;
+  final_model_id: number | null;
+  status: string | null;
+  usage_status: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cache_hit: boolean;
+  failover_triggered: boolean;
+  failover_attempts: number;
+};
+
+export type WorkbenchChatTestResponse = {
+  request_id: string;
+  body: Record<string, JsonValue>;
+  meta: WorkbenchChatTestMeta;
 };
 
 export type PageProps = {

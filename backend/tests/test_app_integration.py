@@ -354,6 +354,94 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_admin_workbench_chat_test_uses_api_key_context(app_client, monkeypatch):
+    class Adapter:
+        async def chat_completion(self, provider, model, request):
+            assert request.model_alias == "workbench-chat"
+            assert request.provider_model == "gpt-workbench"
+            return GatewayChatResponse(
+                body={
+                    "id": "chatcmpl-workbench",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "tested"}}],
+                },
+                prompt_tokens=2,
+                completion_tokens=3,
+                total_tokens=5,
+                raw_usage={"total_tokens": 5},
+                usage_status="parsed",
+            )
+
+    from app.services import provider_service
+
+    monkeypatch.setattr(provider_service.registry, "get_chat", lambda provider_type: Adapter())
+
+    client = app_client
+    created_client = (await client.post("/admin/clients", json={"name": "workbench-client"})).json()
+    key_payload = (
+        await client.post(
+            "/admin/api-keys",
+            json={
+                "client_id": created_client["id"],
+                "name": "workbench-key",
+                "access_config": {"model_aliases": ["workbench-chat"], "provider_names": ["openai"]},
+            },
+        )
+    ).json()
+    provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "openai",
+                "provider_type": "openai_compatible",
+                "base_url": "https://example.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+    model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider["id"], "name": "gpt-workbench", "status": "active"},
+        )
+    ).json()
+    alias = (
+        await client.post(
+            "/admin/model-aliases",
+            json={"alias": "workbench-chat", "status": "active"},
+        )
+    ).json()
+    await client.post(
+        "/admin/route-rules",
+        json={
+            "model_alias_id": alias["id"],
+            "primary_model_id": model["id"],
+            "fallback_model_ids": [],
+            "cache_enabled": False,
+            "status": "active",
+        },
+    )
+
+    response = await client.post(
+        "/admin/workbench/chat-test",
+        json={
+            "api_key_id": key_payload["id"],
+            "model": "workbench-chat",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["body"]["id"] == "chatcmpl-workbench"
+    assert payload["meta"]["status"] == "success"
+    assert payload["meta"]["usage_status"] == "parsed"
+    assert payload["meta"]["total_tokens"] == 5
+    assert payload["meta"]["final_model_id"] == model["id"]
+
+
+@pytest.mark.asyncio
 async def test_native_proxy_access_denied_through_app(app_client):
     client = app_client
     created_client = (await client.post("/admin/clients", json={"name": "native-client"})).json()
