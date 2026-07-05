@@ -1,4 +1,5 @@
 from app.providers.base import ChatProviderAdapter
+from app.providers.gemini_chat import GeminiChatAdapter
 from app.providers.gemini_native import GeminiNativeProxyAdapter
 from app.providers.native_base import NativeProxyAdapter
 from app.providers.openai_compatible import OpenAICompatibleAdapter
@@ -23,5 +24,6 @@ class ProviderRegistry:
 
 
 registry = ProviderRegistry()
+registry.register_chat(GeminiChatAdapter())
 registry.register_chat(OpenAICompatibleAdapter())
 registry.register_native(GeminiNativeProxyAdapter())

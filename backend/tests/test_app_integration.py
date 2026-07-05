@@ -1,4 +1,8 @@
+import json
+
+import httpx
 import pytest
+import respx
 from fastapi import Depends, Header, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -438,6 +442,118 @@ async def test_admin_workbench_chat_test_uses_api_key_context(app_client, monkey
     assert payload["meta"]["status"] == "success"
     assert payload["meta"]["usage_status"] == "parsed"
     assert payload["meta"]["total_tokens"] == 5
+    assert payload["meta"]["final_model_id"] == model["id"]
+
+
+@pytest.mark.asyncio
+async def test_admin_workbench_chat_test_supports_gemini_alias(app_client):
+    client = app_client
+    created_client = (
+        await client.post("/admin/clients", json={"name": "gemini-client"})
+    ).json()
+    key_payload = (
+        await client.post(
+            "/admin/api-keys",
+            json={
+                "client_id": created_client["id"],
+                "name": "gemini-key",
+                "access_config": {
+                    "model_aliases": ["gemini-chat"],
+                    "provider_names": ["gemini"],
+                },
+            },
+        )
+    ).json()
+    provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "gemini",
+                "provider_type": "gemini",
+                "base_url": "https://gemini.test",
+                "encrypted_api_key": "secret",
+                "protocol_modes": ["native_proxy"],
+                "auth_type": "api_key_query",
+                "auth_config": {"query_name": "key"},
+                "usage_parser_type": "gemini",
+                "status": "active",
+            },
+        )
+    ).json()
+    model = (
+        await client.post(
+            "/admin/models",
+            json={
+                "provider_id": provider["id"],
+                "name": "gemini-1.5-pro",
+                "status": "active",
+            },
+        )
+    ).json()
+    alias = (
+        await client.post(
+            "/admin/model-aliases",
+            json={"alias": "gemini-chat", "status": "active"},
+        )
+    ).json()
+    await client.post(
+        "/admin/route-rules",
+        json={
+            "model_alias_id": alias["id"],
+            "primary_model_id": model["id"],
+            "fallback_model_ids": [],
+            "cache_enabled": False,
+            "status": "active",
+        },
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        gemini_route = router.post(
+            "https://gemini.test/v1beta/models/gemini-1.5-pro:generateContent?key=secret"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {"parts": [{"text": "你好，我是 Gemini。"}]},
+                            "finishReason": "STOP",
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 4,
+                        "candidatesTokenCount": 6,
+                        "totalTokenCount": 10,
+                    },
+                },
+            )
+        )
+
+        response = await client.post(
+            "/admin/workbench/chat-test",
+            json={
+                "api_key_id": key_payload["id"],
+                "model": "gemini-chat",
+                "messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "hi"},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 64,
+            },
+        )
+
+    payload = response.json()
+    upstream_body = json.loads(gemini_route.calls[0].request.content)
+
+    assert response.status_code == 200
+    assert upstream_body["systemInstruction"]["parts"][0]["text"] == "You are helpful."
+    assert upstream_body["contents"][0]["role"] == "user"
+    assert upstream_body["generationConfig"]["maxOutputTokens"] == 64
+    assert payload["body"]["choices"][0]["message"]["content"] == "你好，我是 Gemini。"
+    assert payload["meta"]["status"] == "success"
+    assert payload["meta"]["usage_status"] == "parsed"
+    assert payload["meta"]["total_tokens"] == 10
     assert payload["meta"]["final_model_id"] == model["id"]
 
 
