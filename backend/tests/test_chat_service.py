@@ -155,6 +155,19 @@ def test_openai_stream_parser_extracts_usage_and_enables_stream_options():
     assert parsed["total_tokens"] == 3
 
 
+def test_openai_compatible_url_accepts_versioned_base_url():
+    adapter = OpenAICompatibleAdapter()
+    provider = Provider(
+        id=1,
+        name="qwen",
+        provider_type="openai_compatible",
+        base_url="https://example.test/compatible-mode/v1",
+        status="active",
+    )
+
+    assert adapter._url(provider) == "https://example.test/compatible-mode/v1/chat/completions"
+
+
 def test_openai_body_config_can_disable_provider_thinking():
     adapter = OpenAICompatibleAdapter()
     provider = Provider(

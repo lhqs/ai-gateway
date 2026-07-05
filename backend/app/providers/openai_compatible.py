@@ -36,7 +36,10 @@ class OpenAICompatibleAdapter:
         return body
 
     def _url(self, provider: Provider) -> str:
-        return f"{provider.base_url.rstrip('/')}/v1/chat/completions"
+        base_url = provider.base_url.rstrip("/")
+        if base_url.endswith("/v1"):
+            return f"{base_url}/chat/completions"
+        return f"{base_url}/v1/chat/completions"
 
     async def chat_completion(
         self, provider: Provider, model: Model, request: GatewayChatRequest
