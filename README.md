@@ -38,25 +38,25 @@ OpenAI 兼容 / Gemini 原生 · 多供应商路由 · 自动故障转移 · 限
 
 ## 🖼️ 项目截图
 
-> 📸 **建议放置以下截图**（路径建议放在 `docs/screenshots/` 下）：
-
-| 截图 | 建议文件名 | 内容 |
-| --- | --- | --- |
-| Dashboard 总览 | `docs/screenshots/dashboard.png` | 调用量、成本、错误率等核心指标卡片 |
-| 用量明细 | `docs/screenshots/usage.png` | 按模型 / 客户端维度的调用与计费明细 |
-| 模型与路由 | `docs/screenshots/routes.png` | 模型别名配置、fallback 链路 |
-| 控制台工作台 | `docs/screenshots/workbench.png` | 在线试用不同模型 / 供应商 |
-| 定价管理 | `docs/screenshots/pricing.png` | 内置模型定价表 |
-
-```markdown
-<!-- 替换为实际截图后取消注释
+### Dashboard 总览
+调用量、成本、错误率等核心指标一目了然。
 ![Dashboard](docs/screenshots/dashboard.png)
+
+### 用量明细
+按模型 / 客户端维度的调用与计费明细。
 ![Usage](docs/screenshots/usage.png)
+
+### 模型与路由
+模型别名配置、fallback 链路、故障转移策略。
 ![Routes](docs/screenshots/routes.png)
+
+### 控制台工作台
+在线试用不同模型 / 供应商，快速验证路由与鉴权。
 ![Workbench](docs/screenshots/workbench.png)
+
+### 定价管理
+内置模型定价表，按 token 统一计费。
 ![Pricing](docs/screenshots/pricing.png)
--->
-```
 
 ## 🏗️ 架构总览
 
