@@ -6,6 +6,7 @@ from app.core.errors import ProviderCallError
 from app.core.security import AuthContext
 from app.db.models import ApiKey, Base, CacheEntry, Client, Model, ModelAlias, Provider, RouteRule
 from app.schemas.chat import ChatCompletionRequest, ChatMessage, GatewayChatChunk, GatewayChatResponse
+from app.providers.claude_chat import ClaudeChatAdapter
 from app.providers.openai_compatible import OpenAICompatibleAdapter
 from app.services.cache_service import CacheService
 from app.services.chat_service import ChatService
@@ -202,6 +203,89 @@ def test_openai_body_config_can_disable_provider_thinking():
     assert body["model"] == "deepseek-v4-pro"
     assert body["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in body
+
+
+def test_claude_body_maps_openai_request_to_anthropic_messages():
+    adapter = ClaudeChatAdapter()
+    provider = Provider(
+        id=1,
+        name="anthropic",
+        provider_type="claude",
+        base_url="https://api.anthropic.com",
+        status="active",
+        encrypted_api_key="sk-test",
+        auth_type="api_key_header",
+        config={"default_max_tokens": 2048, "anthropic_beta": ["tools-2024-04-04"]},
+    )
+    model = Model(id=1, provider_id=1, name="claude-sonnet-4-5", status="active")
+    request = ChatCompletionRequest(
+        model="default-chat",
+        messages=[
+            ChatMessage(role="system", content="Be concise."),
+            ChatMessage(role="user", content=[{"type": "text", "text": "hello"}]),
+        ],
+        temperature=0.2,
+        stop=["END"],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Look up a value",
+                    "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                },
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "lookup"}},
+    )
+    gateway_request = type(
+        "Request",
+        (),
+        {
+            "body": request.model_dump(exclude_none=True),
+            "messages": request.messages,
+            "stream": False,
+            "request_id": "r1",
+        },
+    )()
+
+    body = adapter._body(provider, model, gateway_request)
+    headers = adapter._headers(provider)
+
+    assert adapter._url(provider) == "https://api.anthropic.com/v1/messages"
+    assert headers["x-api-key"] == "sk-test"
+    assert headers["anthropic-version"] == "2023-06-01"
+    assert headers["anthropic-beta"] == "tools-2024-04-04"
+    assert body["model"] == "claude-sonnet-4-5"
+    assert body["system"] == "Be concise."
+    assert body["max_tokens"] == 2048
+    assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+    assert body["stop_sequences"] == ["END"]
+    assert body["tools"][0]["name"] == "lookup"
+    assert body["tool_choice"] == {"type": "tool", "name": "lookup"}
+
+
+def test_claude_response_is_converted_to_openai_chat_completion():
+    adapter = ClaudeChatAdapter()
+    model = Model(id=1, provider_id=1, name="claude-sonnet-4-5", status="active")
+    request = type("Request", (), {"request_id": "r1"})()
+    body = adapter._openai_body(
+        request,
+        model,
+        {
+            "id": "msg_1",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "done"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 7, "output_tokens": 3},
+        },
+    )
+
+    assert body["id"] == "msg_1"
+    assert body["choices"][0]["message"]["content"] == "done"
+    assert body["choices"][0]["finish_reason"] == "stop"
+    assert body["usage"]["prompt_tokens"] == 7
+    assert body["usage"]["completion_tokens"] == 3
 
 
 @pytest.mark.asyncio

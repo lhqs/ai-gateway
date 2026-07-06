@@ -160,7 +160,7 @@ function AccessFields<T extends AccessForm>({
           </Field>
           <Field label="Providers">
             <Input
-              placeholder="openai, gemini"
+              placeholder="openai, gemini, anthropic"
               value={form.provider_names}
               onChange={(event) => onChange({ provider_names: event.target.value } as Partial<T>)}
             />

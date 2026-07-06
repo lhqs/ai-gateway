@@ -64,6 +64,26 @@ Example for disabling DeepSeek thinking while removing the client-supplied reaso
 }
 ```
 
+## Claude provider config
+
+Claude uses Anthropic's native Messages API behind the gateway's unified
+`/v1/chat/completions` endpoint. Configure the provider with `provider_type="claude"`,
+Anthropic's default API key header, and model names from the Anthropic API.
+
+```json
+{
+  "name": "anthropic",
+  "provider_type": "claude",
+  "base_url": "https://api.anthropic.com",
+  "auth_type": "api_key_header",
+  "auth_config": {"header": "x-api-key"},
+  "usage_parser_type": "anthropic",
+  "config": {
+    "default_max_tokens": 4096
+  }
+}
+```
+
 ## Verify
 
 ```bash

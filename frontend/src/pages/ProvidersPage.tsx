@@ -28,7 +28,7 @@ import type { JsonValue, PageProps, Provider } from "../types/gateway";
 
 const PAGE_SIZE = 20;
 
-type ProviderType = "gemini" | "openai_compatible";
+type ProviderType = "claude" | "gemini" | "openai_compatible";
 
 type ProviderForm = {
   name: string;
@@ -65,6 +65,20 @@ const PROVIDER_TEMPLATES: Record<
     | "native_rate_limit_per_minute"
   > & { label: string }
 > = {
+  claude: {
+    label: "Claude native chat",
+    name: "anthropic",
+    provider_type: "claude",
+    base_url: "https://api.anthropic.com",
+    config: '{"default_max_tokens":4096}',
+    protocol_modes: "anthropic_messages",
+    auth_type: "api_key_header",
+    auth_config: '{"header":"x-api-key"}',
+    allowed_paths: "",
+    blocked_headers: "authorization, cookie, set-cookie, host, content-length",
+    usage_parser_type: "anthropic",
+    native_rate_limit_per_minute: ""
+  },
   gemini: {
     label: "Gemini native proxy",
     name: "gemini",
@@ -96,7 +110,7 @@ const PROVIDER_TEMPLATES: Record<
 };
 
 function isProviderType(value: string): value is ProviderType {
-  return value === "gemini" || value === "openai_compatible";
+  return value === "claude" || value === "gemini" || value === "openai_compatible";
 }
 
 function providerTemplate(value: string) {
@@ -226,6 +240,7 @@ function ProviderAdvancedFields({
           value={form.usage_parser_type}
           onChange={(event) => onChange({ usage_parser_type: event.target.value })}
         >
+          <option value="anthropic">anthropic</option>
           <option value="gemini">gemini</option>
           <option value="openai">openai</option>
           <option value="none">none</option>
@@ -435,6 +450,7 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Provider">
               <Select value={form.provider_type} onChange={(event) => changeProviderType(event.target.value)}>
+                <option value="claude">{PROVIDER_TEMPLATES.claude.label}</option>
                 <option value="gemini">{PROVIDER_TEMPLATES.gemini.label}</option>
                 <option value="openai_compatible">{PROVIDER_TEMPLATES.openai_compatible.label}</option>
               </Select>

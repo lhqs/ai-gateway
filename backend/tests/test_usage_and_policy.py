@@ -1,12 +1,32 @@
 from app.core.errors import ProviderCallError
 from app.db.models import Provider, RouteRule
 from app.providers.gemini_native import GeminiNativeProxyAdapter
+from app.usage.parsers.anthropic import AnthropicUsageParser
 from app.schemas.proxy import NativeProxyRequest
 from app.services.cache_service import CacheService
 from app.services.access_policy_service import AccessPolicyService
 from app.services.failover_service import FailoverService
 from app.usage.parsers.gemini import GeminiUsageParser
 from app.usage.parsers.openai import OpenAIUsageParser
+
+
+def test_anthropic_usage_parser_extracts_cache_tokens():
+    result = AnthropicUsageParser().parse(
+        {
+            "usage": {
+                "input_tokens": 8,
+                "cache_creation_input_tokens": 2,
+                "cache_read_input_tokens": 3,
+                "output_tokens": 5,
+            }
+        }
+    )
+
+    assert result.usage_status == "parsed"
+    assert result.prompt_tokens == 13
+    assert result.completion_tokens == 5
+    assert result.total_tokens == 18
+    assert result.cached_input_tokens == 3
 
 
 def test_gemini_usage_parser_extracts_metadata():
