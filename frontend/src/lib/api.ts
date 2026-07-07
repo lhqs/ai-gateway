@@ -4,6 +4,10 @@ export function apiBase() {
   return import.meta.env.VITE_API_BASE || "http://localhost:8004";
 }
 
+export function gatewayV1Base() {
+  return `${window.location.origin.replace(/\/+$/, "")}/v1`;
+}
+
 export function authHeaders(accessToken = localStorage.getItem("accessToken") || "") {
   return { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
 }

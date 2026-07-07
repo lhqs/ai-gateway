@@ -1,4 +1,4 @@
-import { Copy, KeyRound, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { BookOpen, Copy, KeyRound, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -13,7 +13,7 @@ import {
   Section,
   Select
 } from "../components/ui";
-import { api, apiWithMeta, jsonPreview, parseCsv } from "../lib/api";
+import { api, apiWithMeta, gatewayV1Base, jsonPreview, parseCsv } from "../lib/api";
 import type { ApiKey, Client, JsonValue, PageProps } from "../types/gateway";
 
 const PAGE_SIZE = 8;
@@ -41,6 +41,8 @@ type RemoveTarget = {
   id: number;
   label: string;
 };
+
+type UsageTab = "curl" | "sdk" | "env";
 
 function nextClientName(clients: Client[]) {
   const existingNames = new Set(clients.map((client) => client.name));
@@ -127,6 +129,39 @@ function keyFormFromKey(key: ApiKey): KeyForm {
   };
 }
 
+function apiKeyValue(key: ApiKey) {
+  return key.key || "<API_KEY>";
+}
+
+function curlSnippet(baseUrl: string, key: ApiKey) {
+  return `curl ${baseUrl}/chat/completions \\
+  -H "Authorization: Bearer ${apiKeyValue(key)}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "default-chat",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'`;
+}
+
+function sdkSnippet(baseUrl: string) {
+  return `import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.LHQS_API_KEY,
+  baseURL: "${baseUrl}"
+});
+
+const response = await client.chat.completions.create({
+  model: "default-chat",
+  messages: [{ role: "user", content: "Hello" }]
+});`;
+}
+
+function envSnippet(baseUrl: string, key: ApiKey) {
+  return `LHQS_API_KEY=${apiKeyValue(key)}
+OPENAI_BASE_URL=${baseUrl}`;
+}
+
 function AccessFields<T extends AccessForm>({
   form,
   fullAccess,
@@ -196,11 +231,14 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
   const [keyPage, setKeyPage] = useState(1);
   const [newKey, setNewKey] = useState("");
   const [removeTarget, setRemoveTarget] = useState<RemoveTarget | null>(null);
+  const [usageTarget, setUsageTarget] = useState<ApiKey | null>(null);
+  const [usageTab, setUsageTab] = useState<UsageTab>("curl");
 
   const clientNamesById = useMemo(
     () => new Map(clientOptions.map((client) => [client.id, client.name])),
     [clientOptions]
   );
+  const baseUrl = gatewayV1Base();
 
   async function load() {
     const clientOffset = (clientPage - 1) * PAGE_SIZE;
@@ -344,8 +382,17 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
   }
 
   async function copyApiKey(value: string) {
+    await copyText(value, "API key copied");
+  }
+
+  async function copyText(value: string, notice: string) {
     await navigator.clipboard.writeText(value);
-    setNotice("API key copied");
+    setNotice(notice);
+  }
+
+  function openUsage(key: ApiKey) {
+    setUsageTarget(key);
+    setUsageTab("curl");
   }
 
   function renderApiKey(key: ApiKey) {
@@ -436,6 +483,10 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
             <Badge tone={key.status === "active" ? "good" : "bad"}>{key.status}</Badge>,
             jsonPreview(key.access_config),
             <div className="flex gap-2">
+              <Button onClick={() => openUsage(key)} variant="light">
+                <BookOpen size={14} />
+                Usage
+              </Button>
               <Button onClick={() => openEditKey(key)} variant="light">
                 <Pencil size={14} />
                 Edit
@@ -577,6 +628,90 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={usageTarget !== null} title="API Key Usage" onClose={() => setUsageTarget(null)}>
+        {usageTarget && (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-md border border-line bg-panel p-3">
+                <div className="mb-1 text-xs font-medium text-slate-600">Base URL</div>
+                <div className="flex items-start gap-2">
+                  <code className="min-w-0 flex-1 break-all font-mono text-xs leading-5">
+                    {baseUrl}
+                  </code>
+                  <Button onClick={() => copyText(baseUrl, "Base URL copied")} variant="light">
+                    <Copy size={15} />
+                    Copy
+                  </Button>
+                </div>
+              </div>
+              <div className="rounded-md border border-line bg-panel p-3">
+                <div className="mb-1 text-xs font-medium text-slate-600">API Key</div>
+                {usageTarget.key ? (
+                  <div className="flex items-start gap-2">
+                    <code className="min-w-0 flex-1 break-all font-mono text-xs leading-5">
+                      {usageTarget.key}
+                    </code>
+                    <Button onClick={() => copyApiKey(usageTarget.key as string)} variant="light">
+                      <Copy size={15} />
+                      Copy
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-1 text-xs">
+                    <code className="font-mono">{usageTarget.key_prefix}</code>
+                    <div className="text-slate-500">
+                      Full key is only available when the key is created.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {(["curl", "sdk", "env"] as UsageTab[]).map((tab) => (
+                <Button
+                  key={tab}
+                  onClick={() => setUsageTab(tab)}
+                  variant={usageTab === tab ? "dark" : "light"}
+                >
+                  {tab === "sdk" ? "OpenAI SDK" : tab}
+                </Button>
+              ))}
+            </div>
+
+            <div className="rounded-md border border-line bg-slate-950 p-3 text-slate-100">
+              <div className="mb-2 flex justify-end">
+                <Button
+                  onClick={() =>
+                    copyText(
+                      usageTab === "curl"
+                        ? curlSnippet(baseUrl, usageTarget)
+                        : usageTab === "sdk"
+                          ? sdkSnippet(baseUrl)
+                          : envSnippet(baseUrl, usageTarget),
+                      "Usage snippet copied"
+                    )
+                  }
+                  variant="light"
+                >
+                  <Copy size={15} />
+                  Copy
+                </Button>
+              </div>
+              <pre
+                className="overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5"
+              >
+                {usageTab === "curl"
+                  ? curlSnippet(baseUrl, usageTarget)
+                  : usageTab === "sdk"
+                    ? sdkSnippet(baseUrl)
+                    : envSnippet(baseUrl, usageTarget)}
+              </pre>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal

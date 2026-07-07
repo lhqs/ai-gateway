@@ -17,6 +17,8 @@ The default `.env.example` already sets:
 VITE_API_BASE=http://localhost:8004
 ```
 
-You can also change the backend URL on the login page. The value is saved in browser `localStorage` as `apiBase`.
+`VITE_API_BASE` is the backend URL used by the admin UI. API key usage snippets
+show the current site origin plus `/v1`, so production nginx should expose the
+gateway under the same domain, for example `https://gateway.example.com/v1`.
 
 Login uses the backend `ADMIN_TOKEN`; the frontend verifies it by calling `/admin/dashboard`.
