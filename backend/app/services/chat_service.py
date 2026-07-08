@@ -14,6 +14,7 @@ from app.schemas.chat import ChatCompletionRequest, GatewayChatRequest, GatewayC
 from app.services.cache_service import CacheService
 from app.services.access_policy_service import AccessPolicyService
 from app.services.failover_service import FailoverService
+from app.services.provider_health_service import ProviderHealthService
 from app.services.provider_service import ProviderService
 from app.services.routing_service import RoutingService
 from app.services.usage_service import UsageService
@@ -26,6 +27,7 @@ class ChatService:
         self.routing = RoutingService(session)
         self.provider_service = ProviderService()
         self.failover = FailoverService()
+        self.health = ProviderHealthService(session)
         self.usage = UsageService(session)
         self.access_policy = AccessPolicyService()
         self.settings = get_settings()
@@ -36,8 +38,29 @@ class ChatService:
         return str(api_key_currency or client_currency or self.settings.default_cost_currency).upper()
 
     async def _record_usage(self, auth: AuthContext, **data: Any) -> None:
+        data.setdefault("api_key_id", auth.api_key.id)
         data.setdefault("cost_currency", self._cost_currency(auth))
         await self.usage.record(**data)
+
+    async def _build_attempts(
+        self, auth: AuthContext, payload: ChatCompletionRequest, route
+    ) -> tuple[list[tuple[Model, Provider]], list[str]]:
+        candidates: list[tuple[Model, Provider]] = [(route.model, route.provider)]
+        for fallback_id in route.rule.fallback_model_ids or []:
+            if len(candidates) >= max(route.rule.max_failover_attempts + 1, 1):
+                break
+            fallback_model, fallback_provider = await self.routing.resolve_model(int(fallback_id))
+            candidates.append((fallback_model, fallback_provider))
+
+        attempts: list[tuple[Model, Provider]] = []
+        skipped: list[str] = []
+        for model, provider in candidates:
+            self.access_policy.ensure_chat_allowed(auth, payload.model, provider, model)
+            if self.health.is_available(provider):
+                attempts.append((model, provider))
+            else:
+                skipped.append(f"{provider.name}:{self.health.unavailable_reason(provider)}")
+        return attempts, skipped
 
     async def complete(
         self, auth: AuthContext, request_id: str, payload: ChatCompletionRequest
@@ -78,13 +101,35 @@ class ChatService:
                 )
                 return cached["body"]
 
-        attempts: list[tuple[Model, Provider]] = [(route.model, route.provider)]
-        for fallback_id in route.rule.fallback_model_ids or []:
-            if len(attempts) >= max(route.rule.max_failover_attempts + 1, 1):
-                break
-            fallback_model, fallback_provider = await self.routing.resolve_model(int(fallback_id))
-            self.access_policy.ensure_chat_allowed(auth, payload.model, fallback_provider, fallback_model)
-            attempts.append((fallback_model, fallback_provider))
+        attempts, skipped = await self._build_attempts(auth, payload, route)
+        if not attempts:
+            failure_reason = "; ".join(skipped) or "no_available_provider"
+            await self._record_usage(
+                auth,
+                request_id=request_id,
+                client_id=auth.client.id,
+                model_alias=payload.model,
+                provider_id=route.provider.id,
+                model_id=route.model.id,
+                stream=False,
+                status="failed",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                error_code="provider_unavailable",
+                error_message="No healthy provider is available for this route",
+                call_mode="unified_chat",
+                usage_status="failed",
+                prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                failover_triggered=bool(skipped),
+                initial_provider_id=route.provider.id,
+                initial_model_id=route.model.id,
+                final_provider_id=route.provider.id,
+                final_model_id=route.model.id,
+                failure_reason=failure_reason,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No healthy provider is available for this route",
+            )
 
         last_error: ProviderCallError | None = None
         failure_reason = None
@@ -100,7 +145,8 @@ class ChatService:
             try:
                 response = await self.provider_service.chat_completion(provider, model, gw_request)
                 latency_ms = int((time.perf_counter() - started) * 1000)
-                failover_triggered = attempt_index > 0
+                await self.health.record_call_success(provider)
+                failover_triggered = attempt_index > 0 or bool(skipped)
                 await self._record_usage(
                     auth,
                     request_id=request_id,
@@ -123,7 +169,7 @@ class ChatService:
                     cache_hit=False,
                     cache_key=cache_key,
                     failover_triggered=failover_triggered,
-                    failover_attempts=attempt_index,
+                    failover_attempts=attempt_index + len(skipped),
                     initial_provider_id=route.provider.id,
                     initial_model_id=route.model.id,
                     final_provider_id=provider.id,
@@ -158,6 +204,7 @@ class ChatService:
                 return response.body
             except ProviderCallError as exc:
                 last_error = exc
+                await self.health.record_call_failure(provider, exc)
                 decision = self.failover.should_failover(exc, route.rule, attempt_index)
                 failure_reason = decision.reason or exc.error_type
                 await self._record_usage(
@@ -179,7 +226,7 @@ class ChatService:
                     cache_hit=False,
                     cache_key=cache_key,
                     failover_triggered=decision.should_failover,
-                    failover_attempts=attempt_index,
+                    failover_attempts=attempt_index + len(skipped),
                     initial_provider_id=route.provider.id,
                     initial_model_id=route.model.id,
                     final_provider_id=provider.id,
@@ -205,13 +252,37 @@ class ChatService:
         body["stream"] = True
         started = time.perf_counter()
         first_token_ms: int | None = None
-        attempts: list[tuple[Model, Provider]] = [(route.model, route.provider)]
-        for fallback_id in route.rule.fallback_model_ids or []:
-            if len(attempts) >= max(route.rule.max_failover_attempts + 1, 1):
-                break
-            fallback_model, fallback_provider = await self.routing.resolve_model(int(fallback_id))
-            self.access_policy.ensure_chat_allowed(auth, payload.model, fallback_provider, fallback_model)
-            attempts.append((fallback_model, fallback_provider))
+        attempts, skipped = await self._build_attempts(auth, payload, route)
+        if not attempts:
+            failure_reason = "; ".join(skipped) or "no_available_provider"
+            await self._record_usage(
+                auth,
+                request_id=request_id,
+                client_id=auth.client.id,
+                model_alias=payload.model,
+                provider_id=route.provider.id,
+                model_id=route.model.id,
+                stream=True,
+                status="failed",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                error_code="provider_unavailable",
+                error_message="No healthy provider is available for this route",
+                call_mode="unified_chat",
+                usage_status="failed",
+                prompt_content={"messages": [m.model_dump() for m in payload.messages]},
+                failover_triggered=bool(skipped),
+                initial_provider_id=route.provider.id,
+                initial_model_id=route.model.id,
+                final_provider_id=route.provider.id,
+                final_model_id=route.model.id,
+                failure_reason=failure_reason,
+            )
+            raise ProviderCallError(
+                "No healthy provider is available for this route",
+                error_type="provider_unavailable",
+                status_code=503,
+                retryable=False,
+            )
         last_error: ProviderCallError | None = None
         emitted = False
         failure_reason = None
@@ -266,17 +337,19 @@ class ChatService:
                     raw_usage=raw_usage,
                     prompt_content={"messages": [m.model_dump() for m in payload.messages]},
                     completion_content={"content": "".join(completion_parts)} if completion_parts else None,
-                    failover_triggered=attempt_index > 0,
-                    failover_attempts=attempt_index,
+                    failover_triggered=attempt_index > 0 or bool(skipped),
+                    failover_attempts=attempt_index + len(skipped),
                     initial_provider_id=route.provider.id,
                     initial_model_id=route.model.id,
                     final_provider_id=provider.id,
                     final_model_id=model.id,
                     failure_reason=failure_reason,
                 )
+                await self.health.record_call_success(provider)
                 return
             except ProviderCallError as exc:
                 last_error = exc
+                await self.health.record_call_failure(provider, exc)
                 decision = self.failover.should_failover(exc, route.rule, attempt_index)
                 failure_reason = decision.reason or exc.error_type
                 await self._record_usage(
@@ -297,7 +370,7 @@ class ChatService:
                     raw_response_body=exc.response_body,
                     prompt_content={"messages": [m.model_dump() for m in payload.messages]},
                     failover_triggered=decision.should_failover and not emitted,
-                    failover_attempts=attempt_index,
+                    failover_attempts=attempt_index + len(skipped),
                     initial_provider_id=route.provider.id,
                     initial_model_id=route.model.id,
                     final_provider_id=provider.id,

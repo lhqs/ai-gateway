@@ -32,9 +32,15 @@ export function DashboardPage({ headers, setNotice }: PageProps) {
       </div>
       <div className="grid grid-cols-4 gap-4">
         <Metric label="Errors" value={dashboard?.error_count ?? 0} />
-        <Metric label="Est. Cost" value={`$${(dashboard?.total_cost ?? 0).toFixed(4)}`} />
+        <Metric label="7d Cost" value={`$${(dashboard?.total_cost_7d ?? 0).toFixed(4)}`} />
         <Metric label="Cache Hit Rate" value={`${Math.round((dashboard?.cache_hit_rate ?? 0) * 100)}%`} />
-        <Metric label="Failovers" value={dashboard?.failover_count ?? 0} />
+        <Metric label="Usage Parsed" value={`${Math.round((dashboard?.usage_parsed_rate ?? 0) * 100)}%`} />
+      </div>
+      <div className="grid grid-cols-4 gap-4">
+        <Metric label="Total Cost" value={`$${(dashboard?.total_cost ?? 0).toFixed(4)}`} />
+        <Metric label="24h Cost" value={`$${(dashboard?.total_cost_24h ?? 0).toFixed(4)}`} />
+        <Metric label="Failover Rate" value={`${Math.round((dashboard?.failover_rate ?? 0) * 100)}%`} />
+        <Metric label="Missing Prices" value={dashboard?.missing_price_count ?? 0} />
       </div>
       <Section
         title="Recent Calls"

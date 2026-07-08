@@ -1,6 +1,6 @@
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,7 +46,8 @@ from app.schemas.admin import (
     RouteRuleRead,
     RouteRuleWrite,
 )
-from app.schemas.usage import UsageLogPage
+from app.schemas.usage import UsageLogPage, UsageSummaryPage
+from app.services.provider_health_service import ProviderHealthService
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -54,6 +55,11 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 def _usage_filters(
     *,
     call_mode: str | None = None,
+    client_id: int | None = None,
+    api_key_id: int | None = None,
+    model_alias: str | None = None,
+    provider_id: int | None = None,
+    model_id: int | None = None,
     native_path: str | None = None,
     status_filter: str | None = None,
     usage_status: str | None = None,
@@ -61,9 +67,16 @@ def _usage_filters(
     cost_currency: str | None = None,
     cache_hit: bool | None = None,
     failover_triggered: bool | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> dict[str, Any]:
     return {
         "call_mode": call_mode,
+        "client_id": client_id,
+        "api_key_id": api_key_id,
+        "model_alias": model_alias,
+        "provider_id": provider_id,
+        "model_id": model_id,
         "native_path": native_path,
         "status": status_filter,
         "usage_status": usage_status,
@@ -71,6 +84,8 @@ def _usage_filters(
         "cost_currency": cost_currency.upper() if cost_currency else None,
         "cache_hit": cache_hit,
         "failover_triggered": failover_triggered,
+        "created_from": created_from,
+        "created_to": created_to,
     }
 
 
@@ -79,8 +94,7 @@ async def _patch(repo: Repository, item_id: int, data: dict[str, Any]):
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     for key, value in data.items():
-        if value is not None:
-            setattr(item, key, value)
+        setattr(item, key, value)
     await repo.session.flush()
     await repo.session.refresh(item)
     return item
@@ -238,14 +252,7 @@ async def test_provider(item_id: int, session: AsyncSession = Depends(session_de
     provider = await ProviderRepository(session).get(item_id)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    try:
-        async with httpx.AsyncClient(timeout=min((provider.timeout_ms or 60000) / 1000, 10)) as client:
-            response = await client.get(provider.base_url.rstrip("/"))
-        provider.health_status = "healthy" if response.status_code < 500 else "degraded"
-        return {"status": provider.health_status, "status_code": response.status_code}
-    except httpx.HTTPError as exc:
-        provider.health_status = "unhealthy"
-        return {"status": "unhealthy", "error": str(exc)}
+    return (await ProviderHealthService(session).probe(provider)).as_dict()
 
 
 @router.get("/models", response_model=ModelPage)
@@ -434,6 +441,11 @@ async def list_usage_logs(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     call_mode: str | None = None,
+    client_id: int | None = None,
+    api_key_id: int | None = None,
+    model_alias: str | None = None,
+    provider_id: int | None = None,
+    model_id: int | None = None,
     native_path: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     usage_status: str | None = None,
@@ -441,10 +453,17 @@ async def list_usage_logs(
     cost_currency: str | None = None,
     cache_hit: bool | None = None,
     failover_triggered: bool | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     session: AsyncSession = Depends(session_dep),
 ):
     filters = _usage_filters(
         call_mode=call_mode,
+        client_id=client_id,
+        api_key_id=api_key_id,
+        model_alias=model_alias,
+        provider_id=provider_id,
+        model_id=model_id,
         native_path=native_path,
         status_filter=status_filter,
         usage_status=usage_status,
@@ -452,6 +471,8 @@ async def list_usage_logs(
         cost_currency=cost_currency,
         cache_hit=cache_hit,
         failover_triggered=failover_triggered,
+        created_from=created_from,
+        created_to=created_to,
     )
     repo = UsageLogRepository(session)
     return {
@@ -462,27 +483,113 @@ async def list_usage_logs(
     }
 
 
+@router.get("/usage-summary", response_model=UsageSummaryPage)
+async def usage_summary(
+    group_by: str = Query(
+        default="total",
+        pattern="^(total|day|client|api_key|provider|model|model_alias|status|call_mode)$",
+    ),
+    limit: int = Query(default=100, ge=1, le=1000),
+    call_mode: str | None = None,
+    client_id: int | None = None,
+    api_key_id: int | None = None,
+    model_alias: str | None = None,
+    provider_id: int | None = None,
+    model_id: int | None = None,
+    native_path: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    usage_status: str | None = None,
+    pricing_status: str | None = None,
+    cost_currency: str | None = None,
+    cache_hit: bool | None = None,
+    failover_triggered: bool | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    session: AsyncSession = Depends(session_dep),
+):
+    filters = _usage_filters(
+        call_mode=call_mode,
+        client_id=client_id,
+        api_key_id=api_key_id,
+        model_alias=model_alias,
+        provider_id=provider_id,
+        model_id=model_id,
+        native_path=native_path,
+        status_filter=status_filter,
+        usage_status=usage_status,
+        pricing_status=pricing_status,
+        cost_currency=cost_currency,
+        cache_hit=cache_hit,
+        failover_triggered=failover_triggered,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    rows = await UsageLogRepository(session).aggregate(
+        filters=filters,
+        group_by=group_by,
+        limit=limit,
+    )
+    return {"items": rows, "total": len(rows)}
+
+
 @router.get("/dashboard")
 async def dashboard(session: AsyncSession = Depends(session_dep)):
+    now = datetime.now(timezone.utc)
+    day_ago = now - timedelta(days=1)
+    week_ago = now - timedelta(days=7)
     total = await session.scalar(select(func.count()).select_from(UsageLog))
-    success = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.status == "success"))
+    success = await session.scalar(
+        select(func.count()).select_from(UsageLog).where(UsageLog.status == "success")
+    )
     tokens = await session.scalar(select(func.coalesce(func.sum(UsageLog.total_tokens), 0)))
     avg_latency = await session.scalar(select(func.avg(UsageLog.latency_ms)))
-    errors = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.status != "success"))
+    errors = await session.scalar(
+        select(func.count()).select_from(UsageLog).where(UsageLog.status != "success")
+    )
     total_cost = await session.scalar(select(func.coalesce(func.sum(UsageLog.total_cost), 0)))
-    cache_hits = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.cache_hit.is_(True)))
+    cache_hits = await session.scalar(
+        select(func.count()).select_from(UsageLog).where(UsageLog.cache_hit.is_(True))
+    )
     failovers = await session.scalar(
         select(func.count()).select_from(UsageLog).where(UsageLog.failover_triggered.is_(True))
     )
-    stream_calls = await session.scalar(select(func.count()).select_from(UsageLog).where(UsageLog.stream.is_(True)))
+    stream_calls = await session.scalar(
+        select(func.count()).select_from(UsageLog).where(UsageLog.stream.is_(True))
+    )
+    parsed_usage = await session.scalar(
+        select(func.count())
+        .select_from(UsageLog)
+        .where(UsageLog.usage_status.in_(["parsed", "estimated"]))
+    )
+    missing_prices = await session.scalar(
+        select(func.count())
+        .select_from(UsageLog)
+        .where(UsageLog.pricing_status == "missing_price_config")
+    )
+    total_cost_24h = await session.scalar(
+        select(func.coalesce(func.sum(UsageLog.total_cost), 0)).where(
+            UsageLog.created_at >= day_ago
+        )
+    )
+    total_cost_7d = await session.scalar(
+        select(func.coalesce(func.sum(UsageLog.total_cost), 0)).where(
+            UsageLog.created_at >= week_ago
+        )
+    )
     return {
         "total_requests": total or 0,
         "success_rate": float((success or 0) / total) if total else 0,
+        "error_rate": float((errors or 0) / total) if total else 0,
         "total_tokens": int(tokens or 0),
         "avg_latency_ms": float(avg_latency or 0),
         "error_count": int(errors or 0),
         "total_cost": float(total_cost or 0),
+        "total_cost_24h": float(total_cost_24h or 0),
+        "total_cost_7d": float(total_cost_7d or 0),
         "cache_hit_rate": float((cache_hits or 0) / total) if total else 0,
         "failover_count": int(failovers or 0),
+        "failover_rate": float((failovers or 0) / total) if total else 0,
         "stream_count": int(stream_calls or 0),
+        "usage_parsed_rate": float((parsed_usage or 0) / total) if total else 0,
+        "missing_price_count": int(missing_prices or 0),
     }

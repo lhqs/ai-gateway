@@ -8,6 +8,7 @@ class UsageLogRead(BaseModel):
     id: int
     request_id: str
     client_id: int | None
+    api_key_id: int | None
     model_alias: str | None
     provider_id: int | None
     model_id: int | None
@@ -62,3 +63,26 @@ class UsageLogPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class UsageSummaryRow(BaseModel):
+    group_key: str
+    request_count: int
+    success_count: int
+    error_count: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cached_input_tokens: int
+    total_cost: Any | None = None
+    avg_latency_ms: float
+    cache_hit_count: int
+    failover_count: int
+    stream_count: int
+    parsed_usage_count: int
+    missing_price_count: int
+
+
+class UsageSummaryPage(BaseModel):
+    items: list[UsageSummaryRow]
+    total: int

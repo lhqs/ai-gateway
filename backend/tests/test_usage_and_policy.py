@@ -6,6 +6,7 @@ from app.schemas.proxy import NativeProxyRequest
 from app.services.cache_service import CacheService
 from app.services.access_policy_service import AccessPolicyService
 from app.services.failover_service import FailoverService
+from app.services.provider_health_service import ProviderHealthService
 from app.usage.parsers.gemini import GeminiUsageParser
 from app.usage.parsers.openai import OpenAIUsageParser
 
@@ -156,3 +157,47 @@ def test_access_policy_denies_unlisted_native_path():
         assert exc.status_code == 403
     else:
         raise AssertionError("Expected HTTPException")
+
+
+def test_provider_health_availability_honors_cooldown():
+    provider = Provider(
+        id=1,
+        name="openai",
+        provider_type="openai_compatible",
+        base_url="https://example.test",
+        status="active",
+        health_status="unhealthy",
+        failure_count=3,
+        failure_threshold=3,
+        cooldown_seconds=60,
+    )
+    service = ProviderHealthService(session=None)
+
+    import asyncio
+
+    asyncio.run(
+        service.record_failure(
+            provider,
+            error_summary="Provider returned HTTP 503",
+            status_code=503,
+        )
+    )
+
+    assert provider.health_status == "unhealthy"
+    assert provider.cooldown_until is not None
+    assert not service.is_available(provider)
+
+
+def test_provider_health_default_probe_path_handles_versioned_openai_base_url():
+    provider = Provider(
+        id=1,
+        name="openai",
+        provider_type="openai_compatible",
+        base_url="https://example.test/v1",
+        status="active",
+    )
+
+    url, params = ProviderHealthService(session=None)._probe_target(provider)
+
+    assert url == "https://example.test/v1/models"
+    assert params == {}

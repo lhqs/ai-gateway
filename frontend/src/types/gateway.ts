@@ -21,13 +21,19 @@ export type TokenResponse = {
 export type Dashboard = {
   total_requests: number;
   success_rate: number;
+  error_rate: number;
   total_tokens: number;
   avg_latency_ms: number;
   error_count: number;
   total_cost: number;
+  total_cost_24h: number;
+  total_cost_7d: number;
   cache_hit_rate: number;
   failover_count: number;
+  failover_rate: number;
   stream_count: number;
+  usage_parsed_rate: number;
+  missing_price_count: number;
 };
 
 export type Client = {
@@ -72,6 +78,12 @@ export type Provider = {
   blocked_headers: string[];
   usage_parser_type: string;
   health_status: string;
+  failure_count: number;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  cooldown_until: string | null;
+  last_health_error: string | null;
+  last_health_status_code: number | null;
   failure_threshold: number;
   cooldown_seconds: number;
   timeout_ms: number;
@@ -132,6 +144,7 @@ export type UsageLog = {
   id: number;
   request_id: string;
   client_id: number | null;
+  api_key_id: number | null;
   call_mode: string;
   model_alias: string | null;
   provider_id: number | null;
@@ -169,6 +182,24 @@ export type UsageLog = {
   raw_request_body: unknown | null;
   raw_response_body: unknown | null;
   created_at: string;
+};
+
+export type UsageSummaryRow = {
+  group_key: string;
+  request_count: number;
+  success_count: number;
+  error_count: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_input_tokens: number;
+  total_cost: string | number | null;
+  avg_latency_ms: number;
+  cache_hit_count: number;
+  failover_count: number;
+  stream_count: number;
+  parsed_usage_count: number;
+  missing_price_count: number;
 };
 
 export type WorkbenchChatTestMeta = {

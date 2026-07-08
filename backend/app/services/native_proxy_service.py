@@ -21,6 +21,7 @@ from app.repositories.providers import ProviderRepository
 from app.repositories.route_rules import RouteRuleRepository
 from app.schemas.proxy import NativeProxyRequest
 from app.services.access_policy_service import AccessPolicyService
+from app.services.provider_health_service import ProviderHealthService
 from app.services.usage_service import UsageService
 
 
@@ -47,6 +48,7 @@ class NativeProxyService:
         self.usage = UsageService(session)
         self.rate_limiter = RateLimiter(redis)
         self.access_policy = AccessPolicyService()
+        self.health = ProviderHealthService(session)
 
     def _cost_currency(self, auth: AuthContext) -> str:
         api_key_currency = (auth.api_key.access_config or {}).get("cost_currency")
@@ -54,6 +56,7 @@ class NativeProxyService:
         return str(api_key_currency or client_currency or self.settings.default_cost_currency).upper()
 
     async def _record_usage(self, auth: AuthContext, **data: Any) -> None:
+        data.setdefault("api_key_id", auth.api_key.id)
         data.setdefault("cost_currency", self._cost_currency(auth))
         await self.usage.record(**data)
 
@@ -133,6 +136,29 @@ class NativeProxyService:
                 detail="Native provider is unavailable",
             )
         started = time.perf_counter()
+        if not self.health.is_available(provider):
+            reason = self.health.unavailable_reason(provider)
+            await self._record_usage(
+                auth,
+                request_id=request_id,
+                client_id=auth.client.id,
+                provider_id=provider.id,
+                stream=False,
+                status="failed",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                error_code="provider_unavailable",
+                error_message="Native provider is cooling down or unhealthy",
+                call_mode="native_proxy",
+                native_method=method,
+                native_path=native_path,
+                native_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                usage_status="failed",
+                failure_reason=reason,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Native provider is cooling down or unhealthy",
+            )
         path_target = NativePathTarget(upstream_path=native_path)
         try:
             self.access_policy.ensure_native_allowed(auth, provider, native_path)
@@ -172,6 +198,11 @@ class NativeProxyService:
             response = await adapter.forward(provider, native_request)
             content_type = response.headers.get("content-type")
             raw_response_body = self._json_or_text(response.body, content_type)
+            await self.health.record_response_status(
+                provider,
+                response.status_code,
+                error_summary=raw_response_body if isinstance(raw_response_body, str) else None,
+            )
             await self._record_usage(
                 auth,
                 request_id=request_id,
@@ -206,6 +237,7 @@ class NativeProxyService:
                 headers={k: v for k, v in response.headers.items() if k.lower() != "content-type"},
             )
         except ProviderCallError as exc:
+            await self.health.record_call_failure(provider, exc)
             await self._record_usage(
                 auth,
                 request_id=request_id,
@@ -255,6 +287,29 @@ class NativeProxyService:
                 detail="Native provider is unavailable",
             )
         started = time.perf_counter()
+        if not self.health.is_available(provider):
+            reason = self.health.unavailable_reason(provider)
+            await self._record_usage(
+                auth,
+                request_id=request_id,
+                client_id=auth.client.id,
+                provider_id=provider.id,
+                stream=True,
+                status="failed",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                error_code="provider_unavailable",
+                error_message="Native provider is cooling down or unhealthy",
+                call_mode="native_proxy",
+                native_method=method,
+                native_path=native_path,
+                native_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                usage_status="failed",
+                failure_reason=reason,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Native provider is cooling down or unhealthy",
+            )
         path_target = NativePathTarget(upstream_path=native_path)
         try:
             self.access_policy.ensure_native_allowed(auth, provider, native_path)
@@ -340,7 +395,9 @@ class NativeProxyService:
                     else None,
                     raw_response_body="".join(chunks),
                 )
+                await self.health.record_call_success(provider)
             except ProviderCallError as exc:
+                await self.health.record_call_failure(provider, exc)
                 await self._record_usage(
                     auth,
                     request_id=request_id,
@@ -362,6 +419,11 @@ class NativeProxyService:
                 )
                 raise
             except TimeoutError:
+                await self.health.record_failure(
+                    provider,
+                    error_summary="Native provider stream exceeded maximum duration",
+                    status_code=504,
+                )
                 await self._record_usage(
                     auth,
                     request_id=request_id,

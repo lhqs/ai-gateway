@@ -1,17 +1,17 @@
-import { Pencil, Plus, RefreshCw, Route, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, Plus, RefreshCw, Route, Trash2, X } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, DataTable, Field, Input, Modal, Pagination, Section, Select } from "../components/ui";
-import { api, apiWithMeta, parseNumberCsv } from "../lib/api";
-import type { Alias, Model, PageProps, RouteRule } from "../types/gateway";
+import { api, apiWithMeta } from "../lib/api";
+import type { Alias, Model, PageProps, Provider, RouteRule } from "../types/gateway";
 
 const PAGE_SIZE = 20;
 
 type RouteForm = {
   model_alias_id: string;
   primary_model_id: string;
-  fallback_model_ids: string;
+  fallback_model_ids: string[];
   max_failover_attempts: string;
   cache_ttl_seconds: string;
   status: string;
@@ -23,7 +23,7 @@ function defaultRouteForm(): RouteForm {
   return {
     model_alias_id: "",
     primary_model_id: "",
-    fallback_model_ids: "",
+    fallback_model_ids: [],
     max_failover_attempts: "2",
     cache_ttl_seconds: "300",
     status: "active",
@@ -36,7 +36,7 @@ function routeFormFromRoute(routeRule: RouteRule): RouteForm {
   return {
     model_alias_id: String(routeRule.model_alias_id),
     primary_model_id: String(routeRule.primary_model_id),
-    fallback_model_ids: routeRule.fallback_model_ids.join(", "),
+    fallback_model_ids: routeRule.fallback_model_ids.map(String),
     max_failover_attempts: String(routeRule.max_failover_attempts),
     cache_ttl_seconds: String(routeRule.cache_ttl_seconds),
     status: routeRule.status,
@@ -49,7 +49,7 @@ function routePayload(form: RouteForm) {
   return {
     model_alias_id: Number(form.model_alias_id),
     primary_model_id: Number(form.primary_model_id),
-    fallback_model_ids: parseNumberCsv(form.fallback_model_ids),
+    fallback_model_ids: form.fallback_model_ids.map(Number),
     failover_enabled: form.failover_enabled,
     max_failover_attempts: Number(form.max_failover_attempts),
     cache_enabled: form.cache_enabled,
@@ -61,6 +61,7 @@ function routePayload(form: RouteForm) {
 export function RoutesPage({ headers, setNotice }: PageProps) {
   const [routes, setRoutes] = useState<RouteRule[]>([]);
   const [models, setModels] = useState<Model[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [aliases, setAliases] = useState<Alias[]>([]);
   const [routeTotal, setRouteTotal] = useState(0);
   const [routePage, setRoutePage] = useState(1);
@@ -77,18 +78,34 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
     () => new Map(models.map((model) => [model.id, model.name])),
     [models]
   );
+  const providersById = useMemo(
+    () => new Map(providers.map((provider) => [provider.id, provider.name])),
+    [providers]
+  );
+
+  const fallbackOptions = useMemo(
+    () =>
+      models.filter(
+        (model) =>
+          String(model.id) !== form.primary_model_id &&
+          !form.fallback_model_ids.includes(String(model.id))
+      ),
+    [form.fallback_model_ids, form.primary_model_id, models]
+  );
 
   async function load() {
     const offset = (routePage - 1) * PAGE_SIZE;
-    const [routeData, modelData, aliasData] = await Promise.all([
+    const [routeData, modelData, aliasData, providerData] = await Promise.all([
       apiWithMeta<RouteRule[]>(`/admin/route-rules?limit=${PAGE_SIZE}&offset=${offset}`, { headers }, setNotice),
       apiWithMeta<Model[]>("/admin/models?limit=1000&offset=0", { headers }, setNotice),
-      apiWithMeta<Alias[]>("/admin/model-aliases?limit=1000&offset=0", { headers }, setNotice)
+      apiWithMeta<Alias[]>("/admin/model-aliases?limit=1000&offset=0", { headers }, setNotice),
+      apiWithMeta<Provider[]>("/admin/providers?limit=1000&offset=0", { headers }, setNotice)
     ]);
     setRoutes(routeData.data);
     setRouteTotal(routeData.total);
     setModels(modelData.data);
     setAliases(aliasData.data);
+    setProviders(providerData.data);
   }
 
   useEffect(() => {
@@ -146,6 +163,32 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
 
   function modelName(modelId: number) {
     return modelsById.get(modelId) || modelId;
+  }
+
+  function modelLabel(model: Model) {
+    const providerName = providersById.get(model.provider_id) || `provider ${model.provider_id}`;
+    return `${model.name} / ${providerName}`;
+  }
+
+  function addFallbackModel(modelId: string) {
+    if (!modelId || form.fallback_model_ids.includes(modelId)) return;
+    setForm({ ...form, fallback_model_ids: [...form.fallback_model_ids, modelId] });
+  }
+
+  function removeFallbackModel(modelId: string) {
+    setForm({
+      ...form,
+      fallback_model_ids: form.fallback_model_ids.filter((item) => item !== modelId)
+    });
+  }
+
+  function moveFallbackModel(modelId: string, direction: -1 | 1) {
+    const index = form.fallback_model_ids.indexOf(modelId);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= form.fallback_model_ids.length) return;
+    const next = [...form.fallback_model_ids];
+    [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+    setForm({ ...form, fallback_model_ids: next });
   }
 
   return (
@@ -215,25 +258,81 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
             <Field label="Primary Model">
               <Select
                 value={form.primary_model_id}
-                onChange={(event) => setForm({ ...form, primary_model_id: event.target.value })}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    primary_model_id: event.target.value,
+                    fallback_model_ids: form.fallback_model_ids.filter(
+                      (modelId) => modelId !== event.target.value
+                    )
+                  })
+                }
                 required
               >
                 <option value="">Select model</option>
                 {models.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.name}
+                    {modelLabel(model)}
                   </option>
                 ))}
               </Select>
             </Field>
             <div className="md:col-span-2">
-              <Field label="Fallback Model IDs">
-                <Input
-                  value={form.fallback_model_ids}
-                  onChange={(event) => setForm({ ...form, fallback_model_ids: event.target.value })}
-                  placeholder="2, 3"
-                />
+              <Field label="Fallback Models">
+                <Select value="" onChange={(event) => addFallbackModel(event.target.value)}>
+                  <option value="">Add fallback model</option>
+                  {fallbackOptions.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {modelLabel(model)}
+                    </option>
+                  ))}
+                </Select>
               </Field>
+              <div className="mt-2 space-y-2">
+                {form.fallback_model_ids.length === 0 && (
+                  <div className="rounded-md border border-dashed border-line bg-panel px-3 py-2 text-sm text-slate-500">
+                    No fallback models
+                  </div>
+                )}
+                {form.fallback_model_ids.map((modelId, index) => {
+                  const model = models.find((item) => String(item.id) === modelId);
+                  return (
+                    <div
+                      key={modelId}
+                      className="flex items-center justify-between gap-2 rounded-md border border-line bg-white px-3 py-2 text-sm"
+                    >
+                      <span className="min-w-0 truncate">
+                        {model ? modelLabel(model) : `model ${modelId}`}
+                      </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          onClick={() => moveFallbackModel(modelId, -1)}
+                          variant="light"
+                          disabled={index === 0}
+                          title="Move up"
+                        >
+                          <ChevronUp size={14} />
+                        </Button>
+                        <Button
+                          onClick={() => moveFallbackModel(modelId, 1)}
+                          variant="light"
+                          disabled={index === form.fallback_model_ids.length - 1}
+                          title="Move down"
+                        >
+                          <ChevronDown size={14} />
+                        </Button>
+                        <Button
+                          onClick={() => removeFallbackModel(modelId)}
+                          variant="light"
+                          title="Remove fallback"
+                        >
+                          <X size={14} />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
             <Field label="Max Failover Attempts">
               <Input

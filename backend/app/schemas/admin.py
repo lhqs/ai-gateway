@@ -84,6 +84,12 @@ class ProviderWrite(BaseModel):
     blocked_headers: list[str] = Field(default_factory=list)
     usage_parser_type: str = "none"
     health_status: str = "healthy"
+    failure_count: int = 0
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    cooldown_until: datetime | None = None
+    last_health_error: str | None = None
+    last_health_status_code: int | None = None
     failure_threshold: int = 5
     cooldown_seconds: int = 60
     timeout_ms: int = 60000
@@ -105,6 +111,12 @@ class ProviderPatch(BaseModel):
     blocked_headers: list[str] | None = None
     usage_parser_type: str | None = None
     health_status: str | None = None
+    failure_count: int | None = None
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    cooldown_until: datetime | None = None
+    last_health_error: str | None = None
+    last_health_status_code: int | None = None
     failure_threshold: int | None = None
     cooldown_seconds: int | None = None
     timeout_ms: int | None = None

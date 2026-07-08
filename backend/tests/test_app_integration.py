@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -620,6 +621,7 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
     assert response.status_code == 200
     assert response.json()["id"] == "chatcmpl-test"
     assert logs[0]["call_mode"] == "unified_chat"
+    assert logs[0]["api_key_id"] == key_payload["id"]
     assert logs[0]["prompt_content"]["messages"][0]["content"] == "hi"
     assert logs[0]["pricing_config_id"] == price["id"]
     assert logs[0]["pricing_status"] == "calculated"
@@ -627,6 +629,120 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
     assert logs[0]["total_cost"] is not None
     assert filtered["total"] == 1
     assert filtered["items"][0]["usage_status"] == "parsed"
+
+    key_filtered = (
+        await client.get("/admin/usage-logs", params={"api_key_id": key_payload["id"]})
+    ).json()
+    summary = (
+        await client.get("/admin/usage-summary", params={"group_by": "total", "api_key_id": key_payload["id"]})
+    ).json()
+
+    assert key_filtered["total"] == 1
+    assert summary["items"][0]["request_count"] == 1
+    assert summary["items"][0]["total_tokens"] == 2
+
+
+@pytest.mark.asyncio
+async def test_chat_skips_unhealthy_primary_and_uses_fallback(app_client, monkeypatch):
+    calls = []
+
+    class Adapter:
+        async def chat_completion(self, provider, model, request):
+            calls.append((provider.name, model.name))
+            return GatewayChatResponse(
+                body={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "fallback"}}],
+                },
+                prompt_tokens=1,
+                completion_tokens=2,
+                total_tokens=3,
+                raw_usage={"total_tokens": 3},
+                usage_status="parsed",
+            )
+
+    from app.services import provider_service
+
+    monkeypatch.setattr(provider_service.registry, "get_chat", lambda provider_type: Adapter())
+
+    client = app_client
+    created_client = (await client.post("/admin/clients", json={"name": "fallback-client"})).json()
+    key_payload = (
+        await client.post(
+            "/admin/api-keys",
+            json={
+                "client_id": created_client["id"],
+                "name": "fallback-key",
+                "access_config": {"model_aliases": ["default-chat"], "provider_names": ["primary", "fallback"]},
+            },
+        )
+    ).json()
+    primary_provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "primary",
+                "provider_type": "openai_compatible",
+                "base_url": "https://primary.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+                "health_status": "unhealthy",
+                "failure_count": 5,
+                "failure_threshold": 5,
+                "cooldown_until": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            },
+        )
+    ).json()
+    fallback_provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "fallback",
+                "provider_type": "openai_compatible",
+                "base_url": "https://fallback.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+    primary_model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": primary_provider["id"], "name": "primary-model", "status": "active"},
+        )
+    ).json()
+    fallback_model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": fallback_provider["id"], "name": "fallback-model", "status": "active"},
+        )
+    ).json()
+    alias = (
+        await client.post("/admin/model-aliases", json={"alias": "default-chat", "status": "active"})
+    ).json()
+    await client.post(
+        "/admin/route-rules",
+        json={
+            "model_alias_id": alias["id"],
+            "primary_model_id": primary_model["id"],
+            "fallback_model_ids": [fallback_model["id"]],
+            "max_failover_attempts": 1,
+            "status": "active",
+        },
+    )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key_payload['key']}"},
+        json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    logs = (await client.get("/admin/usage-logs")).json()["items"]
+
+    assert response.status_code == 200
+    assert calls == [("fallback", "fallback-model")]
+    assert logs[0]["failover_triggered"] is True
+    assert logs[0]["final_provider_id"] == fallback_provider["id"]
 
 
 @pytest.mark.asyncio

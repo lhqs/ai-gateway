@@ -42,6 +42,12 @@ type ProviderForm = {
   allowed_paths: string;
   blocked_headers: string;
   usage_parser_type: string;
+  health_path: string;
+  health_status: string;
+  failure_count: string;
+  cooldown_until: string;
+  failure_threshold: string;
+  cooldown_seconds: string;
   timeout_ms: string;
   native_rate_limit_per_minute: string;
   status: string;
@@ -62,6 +68,7 @@ const PROVIDER_TEMPLATES: Record<
     | "allowed_paths"
     | "blocked_headers"
     | "usage_parser_type"
+    | "health_path"
     | "native_rate_limit_per_minute"
   > & { label: string }
 > = {
@@ -77,6 +84,7 @@ const PROVIDER_TEMPLATES: Record<
     allowed_paths: "",
     blocked_headers: "authorization, cookie, set-cookie, host, content-length",
     usage_parser_type: "anthropic",
+    health_path: "v1/models",
     native_rate_limit_per_minute: ""
   },
   gemini: {
@@ -91,6 +99,7 @@ const PROVIDER_TEMPLATES: Record<
     allowed_paths: "v1beta/models/*, v1beta/models/*:generateContent, v1beta/models/*:streamGenerateContent",
     blocked_headers: "authorization, cookie",
     usage_parser_type: "gemini",
+    health_path: "v1beta/models",
     native_rate_limit_per_minute: "60"
   },
   openai_compatible: {
@@ -105,6 +114,7 @@ const PROVIDER_TEMPLATES: Record<
     allowed_paths: "",
     blocked_headers: "authorization, cookie, set-cookie, host, content-length",
     usage_parser_type: "openai",
+    health_path: "v1/models",
     native_rate_limit_per_minute: ""
   }
 };
@@ -131,6 +141,12 @@ function defaultProviderForm(providerType: ProviderType = "gemini"): ProviderFor
     allowed_paths: template.allowed_paths,
     blocked_headers: template.blocked_headers,
     usage_parser_type: template.usage_parser_type,
+    health_path: template.health_path,
+    health_status: "healthy",
+    failure_count: "0",
+    cooldown_until: "",
+    failure_threshold: "5",
+    cooldown_seconds: "60",
     timeout_ms: "60000",
     native_rate_limit_per_minute: template.native_rate_limit_per_minute,
     status: "active",
@@ -154,6 +170,10 @@ function applyProviderTemplate(form: ProviderForm, providerType: ProviderType): 
     allowed_paths: nextTemplate.allowed_paths,
     blocked_headers: nextTemplate.blocked_headers,
     usage_parser_type: nextTemplate.usage_parser_type,
+    health_path: nextTemplate.health_path,
+    health_status: "healthy",
+    failure_count: "0",
+    cooldown_until: "",
     native_rate_limit_per_minute: nextTemplate.native_rate_limit_per_minute
   };
 }
@@ -171,6 +191,12 @@ function providerFormFromProvider(provider: Provider): ProviderForm {
     allowed_paths: provider.allowed_paths.join(", "),
     blocked_headers: provider.blocked_headers.join(", "),
     usage_parser_type: provider.usage_parser_type,
+    health_path: typeof provider.config?.health_path === "string" ? provider.config.health_path : "",
+    health_status: provider.health_status,
+    failure_count: String(provider.failure_count),
+    cooldown_until: dateTimeLocalValue(provider.cooldown_until),
+    failure_threshold: String(provider.failure_threshold),
+    cooldown_seconds: String(provider.cooldown_seconds),
     timeout_ms: String(provider.timeout_ms),
     native_rate_limit_per_minute: provider.native_rate_limit_per_minute
       ? String(provider.native_rate_limit_per_minute)
@@ -184,19 +210,45 @@ function prettyJson(value: Record<string, JsonValue>) {
   return JSON.stringify(value || {}, null, 2);
 }
 
+function formatHealthTime(value: string | null) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function dateTimeLocalValue(value: string | null) {
+  if (!value) return "";
+  return value.slice(0, 16);
+}
+
 function providerPayload(form: ProviderForm, keepExistingApiKey: boolean) {
+  const config = JSON.parse(form.config || "{}");
+  if (form.health_path.trim()) {
+    config.health_path = form.health_path.trim();
+  } else {
+    delete config.health_path;
+  }
   const payload = {
     name: form.name.trim(),
     provider_type: form.provider_type,
     base_url: form.base_url.trim(),
     encrypted_api_key: form.encrypted_api_key || null,
-    config: JSON.parse(form.config || "{}"),
+    config,
     protocol_modes: parseCsv(form.protocol_modes),
     auth_type: form.auth_type,
     auth_config: JSON.parse(form.auth_config || "{}"),
     allowed_paths: parseCsv(form.allowed_paths),
     blocked_headers: parseCsv(form.blocked_headers),
     usage_parser_type: form.usage_parser_type,
+    health_status: form.health_status,
+    failure_count: Number(form.failure_count),
+    cooldown_until: form.cooldown_until ? new Date(form.cooldown_until).toISOString() : null,
+    failure_threshold: Number(form.failure_threshold),
+    cooldown_seconds: Number(form.cooldown_seconds),
     timeout_ms: Number(form.timeout_ms),
     native_rate_limit_per_minute: form.native_rate_limit_per_minute
       ? Number(form.native_rate_limit_per_minute)
@@ -245,6 +297,47 @@ function ProviderAdvancedFields({
           <option value="openai">openai</option>
           <option value="none">none</option>
         </Select>
+      </Field>
+      <Field label="Health Path">
+        <Input
+          value={form.health_path}
+          onChange={(event) => onChange({ health_path: event.target.value })}
+        />
+      </Field>
+      <Field label="Health Status">
+        <Select
+          value={form.health_status}
+          onChange={(event) => onChange({ health_status: event.target.value })}
+        >
+          <option value="healthy">healthy</option>
+          <option value="degraded">degraded</option>
+          <option value="unhealthy">unhealthy</option>
+        </Select>
+      </Field>
+      <Field label="Failure Count">
+        <Input
+          value={form.failure_count}
+          onChange={(event) => onChange({ failure_count: event.target.value })}
+        />
+      </Field>
+      <Field label="Cooldown Until">
+        <Input
+          type="datetime-local"
+          value={form.cooldown_until}
+          onChange={(event) => onChange({ cooldown_until: event.target.value })}
+        />
+      </Field>
+      <Field label="Failure Threshold">
+        <Input
+          value={form.failure_threshold}
+          onChange={(event) => onChange({ failure_threshold: event.target.value })}
+        />
+      </Field>
+      <Field label="Cooldown Seconds">
+        <Input
+          value={form.cooldown_seconds}
+          onChange={(event) => onChange({ cooldown_seconds: event.target.value })}
+        />
       </Field>
       <Field label="Timeout ms">
         <Input value={form.timeout_ms} onChange={(event) => onChange({ timeout_ms: event.target.value })} />
@@ -397,13 +490,12 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
         }
       >
         <DataTable
-          columns={["id", "name", "type", "modes", "auth", "status", "health", "stream", "actions"]}
+          columns={["id", "name", "type", "modes", "status", "health", "failures", "cooldown", "last check", "actions"]}
           rows={providers.map((provider) => [
             provider.id,
             provider.name,
             provider.provider_type,
             provider.protocol_modes.join(", "),
-            provider.auth_type,
             <Badge tone={provider.status === "active" ? "good" : "bad"}>{provider.status}</Badge>,
             <Badge
               tone={
@@ -416,7 +508,9 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
             >
               {provider.health_status}
             </Badge>,
-            provider.allow_streaming ? "yes" : "no",
+            `${provider.failure_count}/${provider.failure_threshold}`,
+            provider.cooldown_until ? formatHealthTime(provider.cooldown_until) : "-",
+            formatHealthTime(provider.last_failure_at || provider.last_success_at),
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => testProvider(provider.id)} variant="light">
                 <CheckCircle2 size={14} />
