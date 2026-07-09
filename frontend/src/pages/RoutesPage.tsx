@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, DataTable, Field, Input, Modal, Pagination, Section, Select } from "../components/ui";
 import { api, apiWithMeta } from "../lib/api";
-import type { Alias, Model, PageProps, Provider, RouteRule } from "../types/gateway";
+import type { Alias, Model, PageProps, Provider, RouteRule, RouteValidationResult } from "../types/gateway";
 
 const PAGE_SIZE = 20;
 
@@ -69,6 +69,7 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
   const [modalMode, setModalMode] = useState<"create" | "edit" | null>(null);
   const [editingRouteId, setEditingRouteId] = useState<number | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RouteRule | null>(null);
+  const [validation, setValidation] = useState<RouteValidationResult | null>(null);
 
   const aliasesById = useMemo(
     () => new Map(aliases.map((alias) => [alias.id, alias.alias])),
@@ -79,7 +80,7 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
     [models]
   );
   const providersById = useMemo(
-    () => new Map(providers.map((provider) => [provider.id, provider.name])),
+    () => new Map(providers.map((provider) => [provider.id, provider])),
     [providers]
   );
 
@@ -123,18 +124,43 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
       model_alias_id: aliases[0] ? String(aliases[0].id) : "",
       primary_model_id: models[0] ? String(models[0].id) : ""
     });
+    setValidation(null);
     setModalMode("create");
   }
 
   function openEditRoute(routeRule: RouteRule) {
     setEditingRouteId(routeRule.id);
     setForm(routeFormFromRoute(routeRule));
+    setValidation(null);
     setModalMode("edit");
+  }
+
+  async function validateRoute(nextForm = form) {
+    const payload = {
+      ...routePayload(nextForm),
+      id: modalMode === "edit" && editingRouteId !== null ? editingRouteId : null
+    };
+    const result = await api<RouteValidationResult>(
+      "/admin/route-rules/validate",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload)
+      },
+      setNotice
+    );
+    setValidation(result);
+    return result;
   }
 
   async function submitRoute(event: React.FormEvent) {
     event.preventDefault();
     const isEdit = modalMode === "edit" && editingRouteId !== null;
+    const result = await validateRoute();
+    if (!result.valid) {
+      setNotice(result.errors[0] || "Route rule is invalid");
+      return;
+    }
     await api<RouteRule>(
       isEdit ? `/admin/route-rules/${editingRouteId}` : "/admin/route-rules",
       {
@@ -166,8 +192,19 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
   }
 
   function modelLabel(model: Model) {
-    const providerName = providersById.get(model.provider_id) || `provider ${model.provider_id}`;
-    return `${model.name} / ${providerName}`;
+    const provider = providersById.get(model.provider_id);
+    const providerName = provider?.name || `provider ${model.provider_id}`;
+    return `${model.name} / ${providerName} / ${model.status} / ${provider?.health_status || "unknown"}`;
+  }
+
+  function modelHealth(modelId: string) {
+    const model = models.find((item) => String(item.id) === modelId);
+    const provider = model ? providersById.get(model.provider_id) : null;
+    return {
+      model,
+      provider,
+      available: model?.status === "active" && provider?.status === "active" && provider?.health_status !== "unhealthy"
+    };
   }
 
   function addFallbackModel(modelId: string) {
@@ -296,14 +333,21 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
                 )}
                 {form.fallback_model_ids.map((modelId, index) => {
                   const model = models.find((item) => String(item.id) === modelId);
+                  const health = modelHealth(modelId);
                   return (
                     <div
                       key={modelId}
                       className="flex items-center justify-between gap-2 rounded-md border border-line bg-white px-3 py-2 text-sm"
                     >
-                      <span className="min-w-0 truncate">
-                        {model ? modelLabel(model) : `model ${modelId}`}
-                      </span>
+                      <div className="min-w-0">
+                        <div className="truncate">{model ? modelLabel(model) : `model ${modelId}`}</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <Badge tone={health.available ? "good" : "bad"}>
+                            {health.available ? "available" : "attention"}
+                          </Badge>
+                          <Badge>{health.provider?.health_status || "unknown health"}</Badge>
+                        </div>
+                      </div>
                       <div className="flex shrink-0 items-center gap-2">
                         <Button
                           onClick={() => moveFallbackModel(modelId, -1)}
@@ -371,6 +415,29 @@ export function RoutesPage({ headers, setNotice }: PageProps) {
                 />
                 Enable cache
               </label>
+            </div>
+            <div className="md:col-span-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button onClick={() => validateRoute()} variant="light" disabled={!form.model_alias_id || !form.primary_model_id}>
+                  Validate
+                </Button>
+                {validation && (
+                  <Badge tone={validation.valid ? "good" : "bad"}>
+                    {validation.valid ? "valid" : "invalid"}
+                  </Badge>
+                )}
+                {validation?.cross_provider && <Badge>cross provider</Badge>}
+              </div>
+              {validation && (validation.errors.length > 0 || validation.warnings.length > 0) && (
+                <div className="mt-2 space-y-1 rounded-md border border-line bg-panel p-3 text-sm">
+                  {validation.errors.map((message) => (
+                    <div key={message} className="text-rose-700">{message}</div>
+                  ))}
+                  {validation.warnings.map((message) => (
+                    <div key={message} className="text-amber-700">{message}</div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex justify-end gap-2">

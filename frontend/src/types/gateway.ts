@@ -91,6 +91,20 @@ export type Provider = {
   native_rate_limit_per_minute: number | null;
 };
 
+export type ProviderConfigField = {
+  name: string;
+  label: string;
+  field_type: "text" | "number" | "tags" | string;
+  default: JsonValue | JsonValue[] | null;
+  help_text: string | null;
+};
+
+export type ProviderConfigSchema = {
+  provider_type: string;
+  fields: ProviderConfigField[];
+  defaults: Record<string, JsonValue>;
+};
+
 export type Model = {
   id: number;
   provider_id: number;
@@ -138,6 +152,27 @@ export type RouteRule = {
   cache_enabled: boolean;
   cache_ttl_seconds: number;
   status: string;
+};
+
+export type RouteValidationModel = {
+  model_id: number;
+  model_name: string | null;
+  provider_id: number | null;
+  provider_name: string | null;
+  model_status: string | null;
+  provider_status: string | null;
+  provider_health_status: string | null;
+  available: boolean;
+};
+
+export type RouteValidationResult = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  primary: RouteValidationModel | null;
+  fallbacks: RouteValidationModel[];
+  duplicate_model_ids: number[];
+  cross_provider: boolean;
 };
 
 export type UsageLog = {

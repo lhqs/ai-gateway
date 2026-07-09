@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type React from "react";
+import { useState } from "react";
 
 export function Badge({
   children,
@@ -70,6 +71,72 @@ export function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
       {...props}
       className={`min-h-24 w-full rounded-md border border-line px-3 py-2 font-mono text-sm outline-none focus:border-accent ${props.className || ""}`}
     />
+  );
+}
+
+export function TagInput({
+  value,
+  onChange,
+  placeholder
+}: {
+  value: string[];
+  onChange: (value: string[]) => void;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function add(rawValue = draft) {
+    const items = rawValue
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!items.length) return;
+    onChange(Array.from(new Set([...value, ...items])));
+    setDraft("");
+  }
+
+  function remove(item: string) {
+    onChange(value.filter((current) => current !== item));
+  }
+
+  return (
+    <div className="min-h-9 rounded-md border border-line bg-white px-2 py-1.5 focus-within:border-accent">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {value.map((item) => (
+          <span
+            key={item}
+            className="inline-flex max-w-full items-center gap-1 rounded-md border border-line bg-panel px-2 py-1 text-xs text-ink"
+          >
+            <span className="max-w-60 truncate">{item}</span>
+            <button
+              type="button"
+              onClick={() => remove(item)}
+              className="inline-flex h-4 w-4 items-center justify-center text-slate-500"
+              title="Remove"
+              aria-label={`Remove ${item}`}
+            >
+              <X size={12} />
+            </button>
+          </span>
+        ))}
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => add()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === "," || event.key === "Tab") {
+              event.preventDefault();
+              add();
+            }
+            if (event.key === "Backspace" && !draft && value.length) {
+              remove(value[value.length - 1]);
+            }
+          }}
+          placeholder={placeholder}
+          className="h-6 min-w-40 flex-1 bg-transparent px-1 text-sm outline-none"
+        />
+      </div>
+    </div>
   );
 }
 

@@ -1,8 +1,10 @@
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,22 +62,100 @@ def _workbench_meta(log: UsageLog | None) -> dict[str, Any]:
     }
 
 
+def _ndjson_event(event_type: str, **payload: Any) -> bytes:
+    return (json.dumps({"type": event_type, **payload}, default=str) + "\n").encode("utf-8")
+
+
+def _stream_delta_from_chunk(data: bytes) -> str:
+    text = data.decode("utf-8", errors="replace")
+    deltas: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        raw = line.removeprefix("data:").strip()
+        if not raw or raw == "[DONE]":
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        choices = payload.get("choices") or []
+        if not choices:
+            continue
+        delta = choices[0].get("delta") or {}
+        content = delta.get("content")
+        if isinstance(content, str):
+            deltas.append(content)
+    return "".join(deltas)
+
+
+async def _usage_log_for_request(session: AsyncSession, request_id: str) -> UsageLog | None:
+    return await session.scalar(
+        select(UsageLog).where(UsageLog.request_id == request_id).order_by(desc(UsageLog.id)).limit(1)
+    )
+
+
 @router.post("/chat-test", response_model=WorkbenchChatTestResponse)
 async def chat_test(
     payload: WorkbenchChatTestRequest,
     session: AsyncSession = Depends(session_dep),
     redis: Redis | None = Depends(get_redis),
 ):
-    if payload.stream:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Workbench chat test does not support streaming yet",
-        )
     request_id = uuid.uuid4().hex
     auth = await _auth_context_for_api_key(session, payload.api_key_id)
     chat_payload = ChatCompletionRequest.model_validate(payload.model_dump(exclude={"api_key_id"}))
-    body = await ChatService(session, CacheService(redis)).complete(auth, request_id, chat_payload)
-    log = await session.scalar(
-        select(UsageLog).where(UsageLog.request_id == request_id).order_by(desc(UsageLog.id)).limit(1)
-    )
+    chat_service = ChatService(session, CacheService(redis))
+    if payload.stream:
+        chunks: list[str] = []
+        async for chunk in chat_service.complete_stream(auth, request_id, chat_payload):
+            chunks.append(chunk.decode("utf-8", errors="replace"))
+        log = await _usage_log_for_request(session, request_id)
+        completion = ""
+        if log and isinstance(log.completion_content, dict):
+            content = log.completion_content.get("content")
+            completion = content if isinstance(content, str) else ""
+        body = {
+            "id": request_id,
+            "object": "workbench.stream",
+            "choices": [{"message": {"role": "assistant", "content": completion}}],
+            "stream_chunks": chunks[-200:],
+        }
+        return {"request_id": request_id, "body": body, "meta": _workbench_meta(log)}
+
+    body = await chat_service.complete(auth, request_id, chat_payload)
+    log = await _usage_log_for_request(session, request_id)
     return {"request_id": request_id, "body": body, "meta": _workbench_meta(log)}
+
+
+@router.post("/chat-test/stream")
+async def chat_test_stream(
+    payload: WorkbenchChatTestRequest,
+    session: AsyncSession = Depends(session_dep),
+    redis: Redis | None = Depends(get_redis),
+):
+    request_id = uuid.uuid4().hex
+    auth = await _auth_context_for_api_key(session, payload.api_key_id)
+    chat_payload = ChatCompletionRequest.model_validate(
+        {**payload.model_dump(exclude={"api_key_id"}), "stream": True}
+    )
+    chat_service = ChatService(session, CacheService(redis))
+
+    async def iterator():
+        yield _ndjson_event("start", request_id=request_id)
+        chunks: list[str] = []
+        try:
+            async for chunk in chat_service.complete_stream(auth, request_id, chat_payload):
+                raw = chunk.decode("utf-8", errors="replace")
+                chunks.append(raw)
+                delta = _stream_delta_from_chunk(chunk)
+                if delta:
+                    yield _ndjson_event("delta", content=delta)
+                else:
+                    yield _ndjson_event("chunk", raw=raw)
+            log = await _usage_log_for_request(session, request_id)
+            yield _ndjson_event("meta", meta=_workbench_meta(log), chunks=chunks[-200:])
+            yield _ndjson_event("done", request_id=request_id)
+        except Exception as exc:
+            yield _ndjson_event("error", message=str(exc), request_id=request_id)
+
+    return StreamingResponse(iterator(), media_type="application/x-ndjson")

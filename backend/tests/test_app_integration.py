@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.core.security import authenticate_api_key
 from app.db.models import AdminUser, Base
 from app.main import create_app
-from app.schemas.chat import GatewayChatResponse
+from app.schemas.chat import GatewayChatChunk, GatewayChatResponse
 
 
 @pytest.fixture
@@ -440,6 +440,17 @@ async def test_admin_provider_patch_config_returns_refreshed_timestamps(app_clie
 
 
 @pytest.mark.asyncio
+async def test_admin_provider_config_schema(app_client):
+    response = await app_client.get("/admin/provider-config-schema/gemini")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider_type"] == "gemini"
+    assert payload["defaults"]["health_path"] == "v1beta/models"
+    assert any(field["name"] == "forward_headers_allowlist" for field in payload["fields"])
+
+
+@pytest.mark.asyncio
 async def test_admin_models_aliases_and_routes_pagination_and_delete(app_client):
     client = app_client
     provider = (
@@ -513,6 +524,82 @@ async def test_admin_models_aliases_and_routes_pagination_and_delete(app_client)
     assert (await client.delete(f"/admin/model-aliases/{alias['id']}")).status_code == 204
     assert (await client.get("/admin/model-aliases")).json()["total"] == 0
     assert (await client.get("/admin/route-rules")).json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_route_rule_validate_reports_errors_and_warnings(app_client):
+    client = app_client
+    provider_one = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "openai",
+                "provider_type": "openai_compatible",
+                "base_url": "https://openai.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+    provider_two = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "backup",
+                "provider_type": "openai_compatible",
+                "base_url": "https://backup.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+                "health_status": "unhealthy",
+            },
+        )
+    ).json()
+    primary_model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider_one["id"], "name": "primary-model", "status": "active"},
+        )
+    ).json()
+    fallback_model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider_two["id"], "name": "fallback-model", "status": "active"},
+        )
+    ).json()
+    alias = (
+        await client.post("/admin/model-aliases", json={"alias": "default-chat", "status": "active"})
+    ).json()
+
+    validation = (
+        await client.post(
+            "/admin/route-rules/validate",
+            json={
+                "model_alias_id": alias["id"],
+                "primary_model_id": primary_model["id"],
+                "fallback_model_ids": [fallback_model["id"]],
+                "status": "active",
+            },
+        )
+    ).json()
+
+    assert validation["valid"] is True
+    assert validation["cross_provider"] is True
+    assert validation["primary"]["available"] is True
+    assert validation["fallbacks"][0]["available"] is False
+    assert any("crosses providers" in message for message in validation["warnings"])
+    assert any("not fully available" in message for message in validation["warnings"])
+
+    duplicate_response = await client.post(
+        "/admin/route-rules",
+        json={
+            "model_alias_id": alias["id"],
+            "primary_model_id": primary_model["id"],
+            "fallback_model_ids": [primary_model["id"]],
+            "status": "active",
+        },
+    )
+    assert duplicate_response.status_code == 400
+    assert "duplicates" in duplicate_response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -831,6 +918,115 @@ async def test_admin_workbench_chat_test_uses_api_key_context(app_client, monkey
     assert payload["meta"]["usage_status"] == "parsed"
     assert payload["meta"]["total_tokens"] == 5
     assert payload["meta"]["final_model_id"] == model["id"]
+
+
+@pytest.mark.asyncio
+async def test_admin_workbench_chat_test_supports_stream(app_client, monkeypatch):
+    class Adapter:
+        async def stream_chat_completion(self, provider, model, request):
+            assert request.stream is True
+            yield GatewayChatChunk(
+                data=b'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n',
+                first_token=True,
+                completion_delta="hel",
+            )
+            yield GatewayChatChunk(
+                data=b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+                completion_delta="lo",
+                prompt_tokens=2,
+                completion_tokens=2,
+                total_tokens=4,
+                raw_usage={"total_tokens": 4},
+                usage_status="parsed",
+            )
+
+    from app.services import provider_service
+
+    monkeypatch.setattr(provider_service.registry, "get_chat", lambda provider_type: Adapter())
+
+    client = app_client
+    created_client = (await client.post("/admin/clients", json={"name": "stream-client"})).json()
+    key_payload = (
+        await client.post(
+            "/admin/api-keys",
+            json={
+                "client_id": created_client["id"],
+                "name": "stream-key",
+                "access_config": {"model_aliases": ["stream-chat"], "provider_names": ["openai"]},
+            },
+        )
+    ).json()
+    provider = (
+        await client.post(
+            "/admin/providers",
+            json={
+                "name": "openai",
+                "provider_type": "openai_compatible",
+                "base_url": "https://example.test",
+                "protocol_modes": ["openai_compatible"],
+                "status": "active",
+            },
+        )
+    ).json()
+    model = (
+        await client.post(
+            "/admin/models",
+            json={"provider_id": provider["id"], "name": "gpt-stream", "status": "active"},
+        )
+    ).json()
+    alias = (
+        await client.post(
+            "/admin/model-aliases",
+            json={"alias": "stream-chat", "status": "active"},
+        )
+    ).json()
+    await client.post(
+        "/admin/route-rules",
+        json={
+            "model_alias_id": alias["id"],
+            "primary_model_id": model["id"],
+            "fallback_model_ids": [],
+            "cache_enabled": False,
+            "status": "active",
+        },
+    )
+
+    response = await client.post(
+        "/admin/workbench/chat-test",
+        json={
+            "api_key_id": key_payload["id"],
+            "model": "stream-chat",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["body"]["object"] == "workbench.stream"
+    assert payload["body"]["choices"][0]["message"]["content"] == "hello"
+    assert len(payload["body"]["stream_chunks"]) == 2
+    assert payload["meta"]["status"] == "success"
+    assert payload["meta"]["usage_status"] == "parsed"
+    assert payload["meta"]["total_tokens"] == 4
+    assert payload["meta"]["final_model_id"] == model["id"]
+
+    stream_response = await client.post(
+        "/admin/workbench/chat-test/stream",
+        json={
+            "api_key_id": key_payload["id"],
+            "model": "stream-chat",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    )
+    events = [json.loads(line) for line in stream_response.text.splitlines() if line.strip()]
+
+    assert stream_response.status_code == 200
+    assert events[0]["type"] == "start"
+    assert [event for event in events if event["type"] == "delta"]
+    assert "".join(event.get("content", "") for event in events if event["type"] == "delta") == "hello"
+    assert events[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio

@@ -139,6 +139,20 @@ class ProviderPage(BaseModel):
     offset: int
 
 
+class ProviderConfigField(BaseModel):
+    name: str
+    label: str
+    field_type: str = "text"
+    default: Any | None = None
+    help_text: str | None = None
+
+
+class ProviderConfigSchema(BaseModel):
+    provider_type: str
+    fields: list[ProviderConfigField]
+    defaults: dict[str, Any] = Field(default_factory=dict)
+
+
 class ModelWrite(BaseModel):
     provider_id: int
     name: str
@@ -306,3 +320,28 @@ class RouteRulePage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class RouteRuleValidateRequest(RouteRuleWrite):
+    id: int | None = None
+
+
+class RouteRuleValidationModel(BaseModel):
+    model_id: int
+    model_name: str | None = None
+    provider_id: int | None = None
+    provider_name: str | None = None
+    model_status: str | None = None
+    provider_status: str | None = None
+    provider_health_status: str | None = None
+    available: bool = False
+
+
+class RouteRuleValidationResult(BaseModel):
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    primary: RouteRuleValidationModel | None = None
+    fallbacks: list[RouteRuleValidationModel] = Field(default_factory=list)
+    duplicate_model_ids: list[int] = Field(default_factory=list)
+    cross_provider: bool = False

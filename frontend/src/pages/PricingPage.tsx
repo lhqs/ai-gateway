@@ -1,4 +1,4 @@
-import { DollarSign, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { DollarSign, Download, FileUp, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -28,6 +28,7 @@ type PriceForm = {
 type PriceFilter = {
   search: string;
   provider_id: string;
+  model_id: string;
   currency_code: string;
   status: string;
 };
@@ -35,6 +36,7 @@ type PriceFilter = {
 const defaultFilter: PriceFilter = {
   search: "",
   provider_id: "",
+  model_id: "",
   currency_code: "",
   status: ""
 };
@@ -56,6 +58,22 @@ const DEFAULT_CONFIG_JSON = JSON.stringify(
   null,
   2
 );
+
+const PRICE_CSV_HEADERS = [
+  "provider",
+  "model",
+  "currency_code",
+  "unit_type",
+  "unit_quantity",
+  "input_unit_price",
+  "cached_input_unit_price",
+  "output_unit_price",
+  "reasoning_output_unit_price",
+  "request_unit_price",
+  "status",
+  "effective_from",
+  "effective_to"
+];
 
 function defaultForm(model?: Model): PriceForm {
   return {
@@ -112,6 +130,51 @@ function formatMoney(value: string | number | null) {
   return value === null || value === "" ? "" : String(value);
 }
 
+function priceWindowStatus(price: ModelPriceConfig) {
+  const now = Date.now();
+  const from = new Date(price.effective_from).getTime();
+  const to = price.effective_to ? new Date(price.effective_to).getTime() : null;
+  if (Number.isFinite(from) && from > now) return { label: "future", tone: "neutral" as const };
+  if (to && to <= now) return { label: "expired", tone: "bad" as const };
+  return { label: "current", tone: "good" as const };
+}
+
+function parsePriceCsv(csv: string) {
+  const lines = csv
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map((item) => item.trim());
+  return lines.slice(1).map((line) => {
+    const values = line.split(",").map((item) => item.trim());
+    return Object.fromEntries(headers.map((header, index) => [header, values[index] || ""]));
+  });
+}
+
+function csvTemplate(providers: Provider[], models: Model[]) {
+  const firstModel = models[0];
+  const provider = firstModel
+    ? providers.find((item) => item.id === firstModel.provider_id)
+    : providers[0];
+  const sampleRow = [
+    provider?.name || "openai",
+    firstModel?.name || "gpt-test",
+    "USD",
+    "tokens",
+    "1000000",
+    "2.00",
+    "0.50",
+    "8.00",
+    "",
+    "",
+    "active",
+    "",
+    ""
+  ];
+  return `${PRICE_CSV_HEADERS.join(",")}\n${sampleRow.join(",")}\n`;
+}
+
 export function PricingPage({ headers, setNotice }: PageProps) {
   const [prices, setPrices] = useState<ModelPriceConfig[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -121,6 +184,8 @@ export function PricingPage({ headers, setNotice }: PageProps) {
   const [filter, setFilter] = useState<PriceFilter>(defaultFilter);
   const [form, setForm] = useState<PriceForm>(defaultForm());
   const [modalMode, setModalMode] = useState<"create" | "edit" | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importCsv, setImportCsv] = useState(`${PRICE_CSV_HEADERS.join(",")}\n`);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ModelPriceConfig | null>(null);
 
@@ -136,6 +201,13 @@ export function PricingPage({ headers, setNotice }: PageProps) {
         ? models.filter((model) => model.provider_id === Number(form.provider_id))
         : models,
     [models, form.provider_id]
+  );
+  const filterModels = useMemo(
+    () =>
+      filter.provider_id
+        ? models.filter((model) => model.provider_id === Number(filter.provider_id))
+        : models,
+    [filter.provider_id, models]
   );
 
   function priceParams(nextPage = page, values = filter) {
@@ -191,6 +263,16 @@ export function PricingPage({ headers, setNotice }: PageProps) {
       ...form,
       provider_id: providerId,
       model_id: firstModel ? String(firstModel.id) : ""
+    });
+  }
+
+  function changeFilterProvider(providerId: string) {
+    setFilter({
+      ...filter,
+      provider_id: providerId,
+      model_id: filter.model_id && modelById.get(Number(filter.model_id))?.provider_id === Number(providerId)
+        ? filter.model_id
+        : ""
     });
   }
 
@@ -253,6 +335,69 @@ export function PricingPage({ headers, setNotice }: PageProps) {
     await load();
   }
 
+  async function importPrices() {
+    const rows = parsePriceCsv(importCsv);
+    if (!rows.length) {
+      setNotice("CSV must include a header row and at least one price row");
+      return;
+    }
+    let created = 0;
+    for (const row of rows) {
+      const provider = providers.find((item) => item.name === row.provider || String(item.id) === row.provider);
+      const model = models.find(
+        (item) =>
+          item.name === row.model ||
+          item.display_name === row.model ||
+          String(item.id) === row.model
+      );
+      if (!provider || !model || model.provider_id !== provider.id) {
+        setNotice(`Skipped row with provider=${row.provider} model=${row.model}`);
+        continue;
+      }
+      await api<ModelPriceConfig>(
+        "/admin/model-price-configs",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            provider_id: provider.id,
+            model_id: model.id,
+            model_name: model.name,
+            currency_code: row.currency_code || "USD",
+            unit_type: row.unit_type || "tokens",
+            unit_quantity: Number(row.unit_quantity || 1000000),
+            input_unit_price: nullablePrice(row.input_unit_price || ""),
+            cached_input_unit_price: nullablePrice(row.cached_input_unit_price || ""),
+            output_unit_price: nullablePrice(row.output_unit_price || ""),
+            reasoning_output_unit_price: nullablePrice(row.reasoning_output_unit_price || ""),
+            request_unit_price: nullablePrice(row.request_unit_price || ""),
+            status: row.status || "active",
+            effective_from: isoOrNull(row.effective_from || ""),
+            effective_to: isoOrNull(row.effective_to || ""),
+            config: { source: "csv_import" }
+          })
+        },
+        setNotice
+      );
+      created += 1;
+    }
+    setImportOpen(false);
+    setNotice(`Imported ${created} price configs`);
+    await load();
+  }
+
+  function downloadTemplate() {
+    const blob = new Blob([csvTemplate(providers, models)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "model-pricing-template.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function applyFilters() {
     setPage(1);
     await load(1, filter);
@@ -281,13 +426,28 @@ export function PricingPage({ headers, setNotice }: PageProps) {
               <span className="text-xs font-medium text-slate-600">Provider</span>
               <Select
                 value={filter.provider_id}
-                onChange={(event) => setFilter({ ...filter, provider_id: event.target.value })}
+                onChange={(event) => changeFilterProvider(event.target.value)}
                 className="w-44"
               >
                 <option value="">Any</option>
                 {providers.map((provider) => (
                   <option key={provider.id} value={provider.id}>
                     {provider.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-600">Model</span>
+              <Select
+                value={filter.model_id}
+                onChange={(event) => setFilter({ ...filter, model_id: event.target.value })}
+                className="w-52"
+              >
+                <option value="">Any</option>
+                {filterModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.display_name || model.name}
                   </option>
                 ))}
               </Select>
@@ -337,32 +497,44 @@ export function PricingPage({ headers, setNotice }: PageProps) {
               <Plus size={15} />
               New Price
             </Button>
+            <Button onClick={() => setImportOpen(true)} variant="light" disabled={!models.length}>
+              <FileUp size={15} />
+              Import CSV
+            </Button>
+            <Button onClick={downloadTemplate} variant="light" disabled={!models.length}>
+              <Download size={15} />
+              CSV Template
+            </Button>
           </div>
         }
       >
         <DataTable
-          columns={["id", "provider", "model", "currency", "unit", "input", "cached input", "output", "status", "actions"]}
-          rows={prices.map((price) => [
-            price.id,
-            providerById.get(price.provider_id) || price.provider_id,
-            modelById.get(price.model_id)?.display_name || price.model_name,
-            price.currency_code,
-            `${price.unit_quantity} ${price.unit_type}`,
-            formatMoney(price.input_unit_price),
-            formatMoney(price.cached_input_unit_price),
-            formatMoney(price.output_unit_price),
-            <Badge tone={price.status === "active" ? "good" : "bad"}>{price.status}</Badge>,
-            <div className="flex gap-2">
-              <Button onClick={() => openEdit(price)} variant="light">
-                <Pencil size={14} />
-                Edit
-              </Button>
-              <Button onClick={() => setRemoveTarget(price)} variant="light">
-                <Trash2 size={14} />
-                Remove
-              </Button>
-            </div>
-          ])}
+          columns={["id", "provider", "model", "currency", "unit", "input", "cached input", "output", "status", "window", "actions"]}
+          rows={prices.map((price) => {
+            const windowStatus = priceWindowStatus(price);
+            return [
+              price.id,
+              providerById.get(price.provider_id) || price.provider_id,
+              modelById.get(price.model_id)?.display_name || price.model_name,
+              price.currency_code,
+              `${price.unit_quantity} ${price.unit_type}`,
+              formatMoney(price.input_unit_price),
+              formatMoney(price.cached_input_unit_price),
+              formatMoney(price.output_unit_price),
+              <Badge tone={price.status === "active" ? "good" : "bad"}>{price.status}</Badge>,
+              <Badge tone={windowStatus.tone}>{windowStatus.label}</Badge>,
+              <div className="flex gap-2">
+                <Button onClick={() => openEdit(price)} variant="light">
+                  <Pencil size={14} />
+                  Edit
+                </Button>
+                <Button onClick={() => setRemoveTarget(price)} variant="light">
+                  <Trash2 size={14} />
+                  Remove
+                </Button>
+              </div>
+            ];
+          })}
         />
         <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
       </Section>
@@ -484,6 +656,31 @@ export function PricingPage({ headers, setNotice }: PageProps) {
             <Button onClick={removePrice}>
               <Trash2 size={15} />
               Remove
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={importOpen} title="Import Price CSV" onClose={() => setImportOpen(false)}>
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <Button onClick={downloadTemplate} variant="light" disabled={!models.length}>
+              <Download size={15} />
+              Download Template
+            </Button>
+          </div>
+          <TextArea
+            value={importCsv}
+            onChange={(event) => setImportCsv(event.target.value)}
+            className="min-h-72"
+          />
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setImportOpen(false)} variant="light">
+              Cancel
+            </Button>
+            <Button onClick={importPrices}>
+              <FileUp size={15} />
+              Import
             </Button>
           </div>
         </div>

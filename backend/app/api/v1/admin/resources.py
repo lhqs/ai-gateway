@@ -39,11 +39,15 @@ from app.schemas.admin import (
     ModelWrite,
     ProviderPage,
     ProviderPatch,
+    ProviderConfigSchema,
     ProviderRead,
     ProviderWrite,
     RouteRulePatch,
     RouteRulePage,
     RouteRuleRead,
+    RouteRuleValidateRequest,
+    RouteRuleValidationModel,
+    RouteRuleValidationResult,
     RouteRuleWrite,
 )
 from app.schemas.usage import UsageLogPage, UsageSummaryPage
@@ -124,6 +128,175 @@ def _normalize_price_payload(data: dict[str, Any], model: Model | None = None) -
     if model and not data.get("model_name"):
         data["model_name"] = model.name
     return data
+
+
+PROVIDER_CONFIG_SCHEMAS: dict[str, ProviderConfigSchema] = {
+    "claude": ProviderConfigSchema(
+        provider_type="claude",
+        defaults={"health_path": "v1/models", "default_max_tokens": 4096},
+        fields=[
+            {
+                "name": "health_path",
+                "label": "Health Path",
+                "default": "v1/models",
+                "help_text": "Relative path used by provider health checks.",
+            },
+            {
+                "name": "default_max_tokens",
+                "label": "Default Max Tokens",
+                "field_type": "number",
+                "default": 4096,
+                "help_text": "Fallback max_tokens for Claude requests that omit it.",
+            },
+        ],
+    ),
+    "gemini": ProviderConfigSchema(
+        provider_type="gemini",
+        defaults={"health_path": "v1beta/models"},
+        fields=[
+            {
+                "name": "health_path",
+                "label": "Health Path",
+                "default": "v1beta/models",
+                "help_text": "Relative path used by provider health checks.",
+            },
+            {
+                "name": "forward_headers_allowlist",
+                "label": "Forward Headers Allowlist",
+                "field_type": "tags",
+                "default": [],
+                "help_text": "Optional native proxy headers allowed to pass upstream.",
+            },
+        ],
+    ),
+    "openai_compatible": ProviderConfigSchema(
+        provider_type="openai_compatible",
+        defaults={"health_path": "v1/models"},
+        fields=[
+            {
+                "name": "health_path",
+                "label": "Health Path",
+                "default": "v1/models",
+                "help_text": "Relative path used by provider health checks.",
+            },
+            {
+                "name": "request_body_remove_fields",
+                "label": "Remove Body Fields",
+                "field_type": "tags",
+                "default": [],
+                "help_text": "Request body fields stripped before forwarding.",
+            },
+        ],
+    ),
+}
+
+
+async def _model_validation_row(
+    session: AsyncSession, model_id: int
+) -> RouteRuleValidationModel:
+    row = (
+        await session.execute(
+            select(Model, Provider)
+            .join(Provider, Provider.id == Model.provider_id)
+            .where(Model.id == model_id)
+        )
+    ).first()
+    if not row:
+        return RouteRuleValidationModel(model_id=model_id, available=False)
+    model, provider = row[0], row[1]
+    available = (
+        model.status == "active"
+        and provider.status == "active"
+        and provider.health_status != "unhealthy"
+    )
+    return RouteRuleValidationModel(
+        model_id=model.id,
+        model_name=model.name,
+        provider_id=provider.id,
+        provider_name=provider.name,
+        model_status=model.status,
+        provider_status=provider.status,
+        provider_health_status=provider.health_status,
+        available=available,
+    )
+
+
+async def _validate_route_rule_payload(
+    session: AsyncSession, payload: RouteRuleValidateRequest
+) -> RouteRuleValidationResult:
+    errors: list[str] = []
+    warnings: list[str] = []
+    ids = [payload.primary_model_id, *payload.fallback_model_ids]
+    duplicate_model_ids = sorted({model_id for model_id in ids if ids.count(model_id) > 1})
+    if duplicate_model_ids:
+        errors.append("Primary and fallback models must not contain duplicates.")
+
+    alias = await session.get(ModelAlias, payload.model_alias_id)
+    if not alias:
+        errors.append("Model alias does not exist.")
+    elif alias.status != "active" and payload.status == "active":
+        warnings.append("Route is active but the selected alias is not active.")
+
+    if payload.max_failover_attempts < 0:
+        errors.append("max_failover_attempts must be greater than or equal to 0.")
+    if payload.cache_ttl_seconds < 0:
+        errors.append("cache_ttl_seconds must be greater than or equal to 0.")
+    if payload.failover_enabled and payload.fallback_model_ids and payload.max_failover_attempts < 1:
+        warnings.append("Failover is enabled but max_failover_attempts is lower than the fallback count.")
+
+    primary = await _model_validation_row(session, payload.primary_model_id)
+    fallbacks = [
+        await _model_validation_row(session, model_id)
+        for model_id in payload.fallback_model_ids
+    ]
+    for label, model in [("Primary", primary), *[(f"Fallback {index + 1}", item) for index, item in enumerate(fallbacks)]]:
+        if not model.model_name:
+            errors.append(f"{label} model does not exist.")
+        elif not model.available and payload.status == "active":
+            warnings.append(
+                f"{label} model is not fully available "
+                f"({model.provider_name or 'unknown provider'} / "
+                f"{model.model_status or 'missing model'} / "
+                f"{model.provider_status or 'missing provider'} / "
+                f"{model.provider_health_status or 'unknown health'})."
+            )
+
+    provider_ids = {
+        model.provider_id
+        for model in [primary, *fallbacks]
+        if model.provider_id is not None
+    }
+    cross_provider = len(provider_ids) > 1
+    if cross_provider:
+        warnings.append("Fallback chain crosses providers; verify cost, capability, and data policy.")
+
+    existing = await session.scalar(
+        select(RouteRule).where(
+            RouteRule.model_alias_id == payload.model_alias_id,
+            RouteRule.status == "active",
+            RouteRule.id != payload.id,
+        )
+    )
+    if existing and payload.status == "active":
+        warnings.append("Another active route rule already uses this alias; priority decides the winner.")
+
+    return RouteRuleValidationResult(
+        valid=not errors,
+        errors=errors,
+        warnings=warnings,
+        primary=primary,
+        fallbacks=fallbacks,
+        duplicate_model_ids=duplicate_model_ids,
+        cross_provider=cross_provider,
+    )
+
+
+async def _ensure_valid_route_rule(
+    session: AsyncSession, payload: RouteRuleValidateRequest
+) -> None:
+    result = await _validate_route_rule_payload(session, payload)
+    if not result.valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.errors[0])
 
 
 @router.get("/clients", response_model=ClientPage)
@@ -221,6 +394,14 @@ async def list_providers(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/provider-config-schema/{provider_type}", response_model=ProviderConfigSchema)
+async def provider_config_schema(provider_type: str):
+    schema = PROVIDER_CONFIG_SCHEMAS.get(provider_type)
+    if not schema:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Provider type is unsupported")
+    return schema
 
 
 @router.post("/providers", response_model=ProviderRead)
@@ -417,14 +598,64 @@ async def list_route_rules(
     }
 
 
+@router.post("/route-rules/validate", response_model=RouteRuleValidationResult)
+async def validate_route_rule(
+    payload: RouteRuleValidateRequest, session: AsyncSession = Depends(session_dep)
+):
+    return await _validate_route_rule_payload(session, payload)
+
+
 @router.post("/route-rules", response_model=RouteRuleRead)
 async def create_route_rule(payload: RouteRuleWrite, session: AsyncSession = Depends(session_dep)):
+    await _ensure_valid_route_rule(session, RouteRuleValidateRequest(**payload.model_dump()))
     return await RouteRuleRepository(session).create(payload.model_dump())
 
 
 @router.patch("/route-rules/{item_id}", response_model=RouteRuleRead)
 async def update_route_rule(item_id: int, payload: RouteRulePatch, session: AsyncSession = Depends(session_dep)):
-    return await _patch(RouteRuleRepository(session), item_id, payload.model_dump(exclude_unset=True))
+    repo = RouteRuleRepository(session)
+    item = await repo.get(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    merged = RouteRuleValidateRequest(
+        id=item.id,
+        model_alias_id=payload.model_alias_id if payload.model_alias_id is not None else item.model_alias_id,
+        primary_model_id=payload.primary_model_id
+        if payload.primary_model_id is not None
+        else item.primary_model_id,
+        fallback_model_ids=payload.fallback_model_ids
+        if payload.fallback_model_ids is not None
+        else item.fallback_model_ids,
+        strategy_type=payload.strategy_type if payload.strategy_type is not None else item.strategy_type,
+        strategy_config=payload.strategy_config
+        if payload.strategy_config is not None
+        else item.strategy_config,
+        priority=payload.priority if payload.priority is not None else item.priority,
+        status=payload.status if payload.status is not None else item.status,
+        failover_enabled=payload.failover_enabled
+        if payload.failover_enabled is not None
+        else item.failover_enabled,
+        failover_on_status_codes=payload.failover_on_status_codes
+        if payload.failover_on_status_codes is not None
+        else item.failover_on_status_codes,
+        failover_on_error_types=payload.failover_on_error_types
+        if payload.failover_on_error_types is not None
+        else item.failover_on_error_types,
+        max_failover_attempts=payload.max_failover_attempts
+        if payload.max_failover_attempts is not None
+        else item.max_failover_attempts,
+        cache_enabled=payload.cache_enabled if payload.cache_enabled is not None else item.cache_enabled,
+        cache_ttl_seconds=payload.cache_ttl_seconds
+        if payload.cache_ttl_seconds is not None
+        else item.cache_ttl_seconds,
+        cache_scope=payload.cache_scope if payload.cache_scope is not None else item.cache_scope,
+    )
+    await _ensure_valid_route_rule(session, merged)
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(item, key, value)
+    await session.flush()
+    await session.refresh(item)
+    return item
 
 
 @router.delete("/route-rules/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

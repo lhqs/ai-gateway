@@ -21,10 +21,11 @@ import {
   Pagination,
   Section,
   Select,
+  TagInput,
   TextArea
 } from "../components/ui";
 import { api, apiWithMeta, parseCsv } from "../lib/api";
-import type { JsonValue, PageProps, Provider } from "../types/gateway";
+import type { JsonValue, PageProps, Provider, ProviderConfigField, ProviderConfigSchema } from "../types/gateway";
 
 const PAGE_SIZE = 20;
 
@@ -39,10 +40,13 @@ type ProviderForm = {
   protocol_modes: string;
   auth_type: string;
   auth_config: string;
-  allowed_paths: string;
-  blocked_headers: string;
+  allowed_paths: string[];
+  blocked_headers: string[];
   usage_parser_type: string;
   health_path: string;
+  forward_headers_allowlist: string[];
+  request_body_remove_fields: string[];
+  default_max_tokens: string;
   health_status: string;
   failure_count: string;
   cooldown_until: string;
@@ -69,6 +73,9 @@ const PROVIDER_TEMPLATES: Record<
     | "blocked_headers"
     | "usage_parser_type"
     | "health_path"
+    | "forward_headers_allowlist"
+    | "request_body_remove_fields"
+    | "default_max_tokens"
     | "native_rate_limit_per_minute"
   > & { label: string }
 > = {
@@ -81,10 +88,13 @@ const PROVIDER_TEMPLATES: Record<
     protocol_modes: "anthropic_messages",
     auth_type: "api_key_header",
     auth_config: '{"header":"x-api-key"}',
-    allowed_paths: "",
-    blocked_headers: "authorization, cookie, set-cookie, host, content-length",
+    allowed_paths: [],
+    blocked_headers: ["authorization", "cookie", "set-cookie", "host", "content-length"],
     usage_parser_type: "anthropic",
     health_path: "v1/models",
+    forward_headers_allowlist: [],
+    request_body_remove_fields: [],
+    default_max_tokens: "4096",
     native_rate_limit_per_minute: ""
   },
   gemini: {
@@ -96,10 +106,13 @@ const PROVIDER_TEMPLATES: Record<
     protocol_modes: "native_proxy",
     auth_type: "api_key_query",
     auth_config: '{"query_name":"key"}',
-    allowed_paths: "v1beta/models/*, v1beta/models/*:generateContent, v1beta/models/*:streamGenerateContent",
-    blocked_headers: "authorization, cookie",
+    allowed_paths: ["v1beta/models/*", "v1beta/models/*:generateContent", "v1beta/models/*:streamGenerateContent"],
+    blocked_headers: ["authorization", "cookie"],
     usage_parser_type: "gemini",
     health_path: "v1beta/models",
+    forward_headers_allowlist: [],
+    request_body_remove_fields: [],
+    default_max_tokens: "",
     native_rate_limit_per_minute: "60"
   },
   openai_compatible: {
@@ -111,10 +124,13 @@ const PROVIDER_TEMPLATES: Record<
     protocol_modes: "openai_compatible",
     auth_type: "bearer_token",
     auth_config: '{"header":"Authorization"}',
-    allowed_paths: "",
-    blocked_headers: "authorization, cookie, set-cookie, host, content-length",
+    allowed_paths: [],
+    blocked_headers: ["authorization", "cookie", "set-cookie", "host", "content-length"],
     usage_parser_type: "openai",
     health_path: "v1/models",
+    forward_headers_allowlist: [],
+    request_body_remove_fields: [],
+    default_max_tokens: "",
     native_rate_limit_per_minute: ""
   }
 };
@@ -142,6 +158,9 @@ function defaultProviderForm(providerType: ProviderType = "gemini"): ProviderFor
     blocked_headers: template.blocked_headers,
     usage_parser_type: template.usage_parser_type,
     health_path: template.health_path,
+    forward_headers_allowlist: template.forward_headers_allowlist,
+    request_body_remove_fields: template.request_body_remove_fields,
+    default_max_tokens: template.default_max_tokens,
     health_status: "healthy",
     failure_count: "0",
     cooldown_until: "",
@@ -171,6 +190,9 @@ function applyProviderTemplate(form: ProviderForm, providerType: ProviderType): 
     blocked_headers: nextTemplate.blocked_headers,
     usage_parser_type: nextTemplate.usage_parser_type,
     health_path: nextTemplate.health_path,
+    forward_headers_allowlist: nextTemplate.forward_headers_allowlist,
+    request_body_remove_fields: nextTemplate.request_body_remove_fields,
+    default_max_tokens: nextTemplate.default_max_tokens,
     health_status: "healthy",
     failure_count: "0",
     cooldown_until: "",
@@ -188,10 +210,21 @@ function providerFormFromProvider(provider: Provider): ProviderForm {
     protocol_modes: provider.protocol_modes.join(", "),
     auth_type: provider.auth_type,
     auth_config: prettyJson(provider.auth_config || {}),
-    allowed_paths: provider.allowed_paths.join(", "),
-    blocked_headers: provider.blocked_headers.join(", "),
+    allowed_paths: provider.allowed_paths,
+    blocked_headers: provider.blocked_headers,
     usage_parser_type: provider.usage_parser_type,
     health_path: typeof provider.config?.health_path === "string" ? provider.config.health_path : "",
+    forward_headers_allowlist: Array.isArray(provider.config?.forward_headers_allowlist)
+      ? provider.config.forward_headers_allowlist.map(String)
+      : [],
+    request_body_remove_fields: Array.isArray(provider.config?.request_body_remove_fields)
+      ? provider.config.request_body_remove_fields.map(String)
+      : [],
+    default_max_tokens:
+      typeof provider.config?.default_max_tokens === "number" ||
+      typeof provider.config?.default_max_tokens === "string"
+        ? String(provider.config.default_max_tokens)
+        : "",
     health_status: provider.health_status,
     failure_count: String(provider.failure_count),
     cooldown_until: dateTimeLocalValue(provider.cooldown_until),
@@ -232,6 +265,21 @@ function providerPayload(form: ProviderForm, keepExistingApiKey: boolean) {
   } else {
     delete config.health_path;
   }
+  if (form.forward_headers_allowlist.length) {
+    config.forward_headers_allowlist = form.forward_headers_allowlist;
+  } else {
+    delete config.forward_headers_allowlist;
+  }
+  if (form.request_body_remove_fields.length) {
+    config.request_body_remove_fields = form.request_body_remove_fields;
+  } else {
+    delete config.request_body_remove_fields;
+  }
+  if (form.default_max_tokens.trim()) {
+    config.default_max_tokens = Number(form.default_max_tokens);
+  } else {
+    delete config.default_max_tokens;
+  }
   const payload = {
     name: form.name.trim(),
     provider_type: form.provider_type,
@@ -241,8 +289,8 @@ function providerPayload(form: ProviderForm, keepExistingApiKey: boolean) {
     protocol_modes: parseCsv(form.protocol_modes),
     auth_type: form.auth_type,
     auth_config: JSON.parse(form.auth_config || "{}"),
-    allowed_paths: parseCsv(form.allowed_paths),
-    blocked_headers: parseCsv(form.blocked_headers),
+    allowed_paths: form.allowed_paths,
+    blocked_headers: form.blocked_headers,
     usage_parser_type: form.usage_parser_type,
     health_status: form.health_status,
     failure_count: Number(form.failure_count),
@@ -267,13 +315,66 @@ function providerPayload(form: ProviderForm, keepExistingApiKey: boolean) {
 
 function ProviderAdvancedFields({
   form,
+  schema,
   onChange
 }: {
   form: ProviderForm;
+  schema: ProviderConfigSchema | null;
   onChange: (patch: Partial<ProviderForm>) => void;
 }) {
+  function renderSchemaField(field: ProviderConfigField) {
+    if (field.name === "health_path") {
+      return (
+        <Field key={field.name} label={field.label}>
+          <Input
+            value={form.health_path}
+            onChange={(event) => onChange({ health_path: event.target.value })}
+          />
+        </Field>
+      );
+    }
+    if (field.name === "default_max_tokens") {
+      return (
+        <Field key={field.name} label={field.label}>
+          <Input
+            value={form.default_max_tokens}
+            onChange={(event) => onChange({ default_max_tokens: event.target.value })}
+          />
+        </Field>
+      );
+    }
+    if (field.name === "forward_headers_allowlist") {
+      return (
+        <div key={field.name} className="md:col-span-2">
+          <Field label={field.label}>
+            <TagInput
+              value={form.forward_headers_allowlist}
+              onChange={(value) => onChange({ forward_headers_allowlist: value })}
+              placeholder="Add header"
+            />
+          </Field>
+        </div>
+      );
+    }
+    if (field.name === "request_body_remove_fields") {
+      return (
+        <div key={field.name} className="md:col-span-2">
+          <Field label={field.label}>
+            <TagInput
+              value={form.request_body_remove_fields}
+              onChange={(value) => onChange({ request_body_remove_fields: value })}
+              placeholder="Add field"
+            />
+          </Field>
+        </div>
+      );
+    }
+    return null;
+  }
+
   return (
     <div className="grid gap-3 border-t border-line p-3 md:grid-cols-2">
+      {schema?.fields.map(renderSchemaField)}
       <Field label="Protocol Modes">
         <Input
           value={form.protocol_modes}
@@ -297,12 +398,6 @@ function ProviderAdvancedFields({
           <option value="openai">openai</option>
           <option value="none">none</option>
         </Select>
-      </Field>
-      <Field label="Health Path">
-        <Input
-          value={form.health_path}
-          onChange={(event) => onChange({ health_path: event.target.value })}
-        />
       </Field>
       <Field label="Health Status">
         <Select
@@ -349,14 +444,19 @@ function ProviderAdvancedFields({
         />
       </Field>
       <Field label="Blocked Headers">
-        <Input
+        <TagInput
           value={form.blocked_headers}
-          onChange={(event) => onChange({ blocked_headers: event.target.value })}
+          onChange={(value) => onChange({ blocked_headers: value })}
+          placeholder="Add header"
         />
       </Field>
       <div className="md:col-span-2">
         <Field label="Allowed Paths">
-          <Input value={form.allowed_paths} onChange={(event) => onChange({ allowed_paths: event.target.value })} />
+          <TagInput
+            value={form.allowed_paths}
+            onChange={(value) => onChange({ allowed_paths: value })}
+            placeholder="Add native path pattern"
+          />
         </Field>
       </div>
       <div className="md:col-span-2">
@@ -382,6 +482,7 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
   const [editingProviderId, setEditingProviderId] = useState<number | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Provider | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [providerSchema, setProviderSchema] = useState<ProviderConfigSchema | null>(null);
 
   async function load() {
     const offset = (providerPage - 1) * PAGE_SIZE;
@@ -402,9 +503,21 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
     setProviderPage((page) => Math.min(page, Math.max(1, Math.ceil(providerTotal / PAGE_SIZE))));
   }, [providerTotal]);
 
+  useEffect(() => {
+    if (!modalMode) return;
+    api<ProviderConfigSchema>(
+      `/admin/provider-config-schema/${form.provider_type}`,
+      { headers },
+      setNotice
+    )
+      .then(setProviderSchema)
+      .catch(() => setProviderSchema(null));
+  }, [form.provider_type, headers, modalMode]);
+
   function openCreateProvider() {
     setEditingProviderId(null);
     setForm(defaultProviderForm());
+    setProviderSchema(null);
     setShowAdvanced(false);
     setModalMode("create");
   }
@@ -412,6 +525,7 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
   function openEditProvider(provider: Provider) {
     setEditingProviderId(provider.id);
     setForm(providerFormFromProvider(provider));
+    setProviderSchema(null);
     setShowAdvanced(false);
     setModalMode("edit");
   }
@@ -594,7 +708,7 @@ export function ProvidersPage({ headers, setNotice }: PageProps) {
               </span>
               {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
             </button>
-            {showAdvanced && <ProviderAdvancedFields form={form} onChange={updateForm} />}
+            {showAdvanced && <ProviderAdvancedFields form={form} schema={providerSchema} onChange={updateForm} />}
           </div>
           <div className="flex justify-end gap-2">
             <Button onClick={() => setModalMode(null)} variant="light">

@@ -3,7 +3,7 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, Field, Input, Section, Select, TextArea } from "../components/ui";
-import { api, apiWithMeta } from "../lib/api";
+import { api, apiBase, apiWithMeta } from "../lib/api";
 import type {
   Alias,
   ApiKey,
@@ -12,6 +12,7 @@ import type {
   Model,
   PageProps,
   Provider,
+  WorkbenchChatTestMeta,
   WorkbenchChatTestResponse
 } from "../types/gateway";
 
@@ -24,6 +25,7 @@ type WorkbenchForm = {
   temperature: string;
   top_p: string;
   max_tokens: string;
+  stream: boolean;
 };
 
 type DetailTab = "summary" | "request" | "response";
@@ -36,7 +38,8 @@ const defaultForm: WorkbenchForm = {
   user_prompt: "Say hello in one sentence.",
   temperature: "0.7",
   top_p: "",
-  max_tokens: "512"
+  max_tokens: "512",
+  stream: false
 };
 
 function compactJson(value: unknown) {
@@ -54,6 +57,15 @@ function assistantText(body: Record<string, JsonValue> | null) {
   return typeof content === "string" ? content : compactJson(content);
 }
 
+function responseMode(body: Record<string, JsonValue> | null) {
+  return body?.object === "workbench.stream" ? "stream" : "non-stream";
+}
+
+function streamChunks(body: Record<string, JsonValue> | null) {
+  const chunks = body?.stream_chunks;
+  return Array.isArray(chunks) ? chunks.map((chunk) => String(chunk)) : [];
+}
+
 function numericField(value: string) {
   if (!value.trim()) return undefined;
   const numeric = Number(value);
@@ -69,7 +81,7 @@ function buildPayload(form: WorkbenchForm) {
     api_key_id: Number(form.api_key_id),
     model: form.model.trim(),
     messages,
-    stream: false,
+    stream: form.stream,
     temperature: numericField(form.temperature),
     top_p: numericField(form.top_p),
     max_tokens: numericField(form.max_tokens)
@@ -83,6 +95,30 @@ function jsonBodyFromForm(form: WorkbenchForm) {
 
 function valueOrDash(value: string | number | null | undefined) {
   return value === null || value === undefined || value === "" ? "-" : value;
+}
+
+function emptyWorkbenchMeta(): WorkbenchChatTestMeta {
+  return {
+    usage_log_id: null,
+    latency_ms: null,
+    model_alias: null,
+    provider_id: null,
+    model_id: null,
+    final_provider_id: null,
+    final_model_id: null,
+    status: null,
+    usage_status: null,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    cached_input_tokens: 0,
+    total_cost: null,
+    cost_currency: null,
+    pricing_status: null,
+    cache_hit: false,
+    failover_triggered: false,
+    failover_attempts: 0
+  };
 }
 
 function Metric({
@@ -124,6 +160,9 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
   const [rawBody, setRawBody] = useState(jsonBodyFromForm(defaultForm));
   const [requestPreview, setRequestPreview] = useState("");
   const [result, setResult] = useState<WorkbenchChatTestResponse | null>(null);
+  const [streamingText, setStreamingText] = useState("");
+  const [streamingChunks, setStreamingChunks] = useState<string[]>([]);
+  const [streamRequestId, setStreamRequestId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
   const [loading, setLoading] = useState(false);
 
@@ -149,6 +188,12 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
       ? modelsById.get(result.meta.model_id)
       : null;
   const responseText = assistantText(result?.body || null);
+  const actualMode = responseMode(result?.body || null);
+  const actualStreamChunks = streamChunks(result?.body || null);
+  const displayResponseText = loading && form.stream ? streamingText : responseText;
+  const displayMode = loading && form.stream ? "stream" : actualMode;
+  const displayStreamChunks = loading && form.stream ? streamingChunks : actualStreamChunks;
+  const displayRequestId = result?.request_id || streamRequestId;
   const ready = Boolean(form.api_key_id && form.model && form.user_prompt.trim());
   const statusTone = result?.meta.status === "success" ? "good" : result?.meta.status === "failed" ? "bad" : "neutral";
 
@@ -201,20 +246,101 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
     setMode("json");
   }
 
+  async function submitStreaming(payload: Record<string, unknown>) {
+    setResult(null);
+    setStreamingText("");
+    setStreamingChunks([]);
+    setStreamRequestId(null);
+    setDetailTab("summary");
+
+    const response = await fetch(`${apiBase()}/admin/workbench/chat-test/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok || !response.body) {
+      const message = await response.text();
+      setNotice(message || "Stream request failed");
+      throw new Error(message || "Stream request failed");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let requestId = "";
+    let accumulatedText = "";
+    let meta: WorkbenchChatTestMeta | null = null;
+    let rawChunks: string[] = [];
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line) as {
+          type: string;
+          request_id?: string;
+          content?: string;
+          raw?: string;
+          meta?: WorkbenchChatTestMeta;
+          chunks?: string[];
+          message?: string;
+        };
+        if (event.type === "start" && event.request_id) {
+          requestId = event.request_id;
+          setStreamRequestId(event.request_id);
+        } else if (event.type === "delta" && event.content) {
+          accumulatedText += event.content;
+          setStreamingText(accumulatedText);
+        } else if (event.type === "chunk" && event.raw) {
+          rawChunks = [...rawChunks, event.raw];
+          setStreamingChunks(rawChunks);
+        } else if (event.type === "meta") {
+          meta = event.meta || null;
+          rawChunks = event.chunks || rawChunks;
+          setStreamingChunks(rawChunks);
+        } else if (event.type === "error") {
+          throw new Error(event.message || "Stream request failed");
+        }
+      }
+    }
+
+    const finalResult: WorkbenchChatTestResponse = {
+      request_id: requestId,
+      body: {
+        id: requestId,
+        object: "workbench.stream",
+        choices: [{ message: { role: "assistant", content: accumulatedText } }],
+        stream_chunks: rawChunks
+      },
+      meta: meta || emptyWorkbenchMeta()
+    };
+    setResult(finalResult);
+    setNotice(`Workbench stream ${requestId.slice(0, 12)} completed`);
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setLoading(true);
     try {
       let payload;
       try {
-        payload = mode === "json"
-          ? { ...JSON.parse(rawBody), api_key_id: Number(form.api_key_id), stream: false }
-          : buildPayload(form);
+        payload =
+          mode === "json"
+            ? { ...JSON.parse(rawBody), api_key_id: Number(form.api_key_id), stream: form.stream }
+            : buildPayload(form);
       } catch {
         setNotice("Request body is not valid JSON");
         return;
       }
       setRequestPreview(compactJson(payload));
+      if (payload.stream) {
+        await submitStreaming(payload);
+        return;
+      }
       const response = await api<WorkbenchChatTestResponse>(
         "/admin/workbench/chat-test",
         {
@@ -253,7 +379,7 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
             <div className="space-y-4">
               <div className="flex items-center justify-between rounded-md border border-line bg-panel px-3 py-2">
                 <span className="text-xs font-medium text-slate-500">Status</span>
-                <Badge tone={statusTone}>{result?.meta.status || (ready ? "ready" : "setup required")}</Badge>
+                <Badge tone={statusTone}>{loading && form.stream ? "streaming" : result?.meta.status || (ready ? "ready" : "setup required")}</Badge>
               </div>
               <Field label="Client">
                 <Select value={form.client_id} onChange={(event) => changeClient(event.target.value)}>
@@ -300,6 +426,15 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
                   <Input value={form.max_tokens} onChange={(event) => updateForm({ max_tokens: event.target.value })} />
                 </Field>
               </div>
+              <label className="flex h-9 items-center justify-between rounded-md border border-line bg-white px-3 text-sm text-slate-700">
+                <span>Stream</span>
+                <input
+                  type="checkbox"
+                  checked={form.stream}
+                  onChange={(event) => updateForm({ stream: event.target.checked })}
+                  className="h-4 w-4 rounded border-line"
+                />
+              </label>
             </div>
           </Section>
 
@@ -347,6 +482,8 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
               result ? (
                 <div className="flex items-center gap-2 text-xs text-slate-500">
                   <span>{result.meta.total_tokens} tokens</span>
+                  <span>{displayMode}</span>
+                  {displayStreamChunks.length > 0 && <span>{displayStreamChunks.length} chunks</span>}
                   <span>{result.meta.cache_hit ? "cache hit" : "live call"}</span>
                   <span>{result.meta.failover_triggered ? `failover ${result.meta.failover_attempts}` : "primary"}</span>
                 </div>
@@ -360,7 +497,7 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
               <Metric label="Latency" value={result ? `${result.meta.latency_ms ?? 0} ms` : "-"} />
             </div>
             <pre className="min-h-56 max-h-[460px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-panel p-4 text-sm leading-6 text-ink">
-              {responseText || "Run a test to see the assistant response."}
+              {displayResponseText || (loading && form.stream ? "Waiting for first stream chunk..." : "Run a test to see the assistant response.")}
             </pre>
           </Section>
 
@@ -384,7 +521,9 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
               <div className="grid gap-x-6 md:grid-cols-2">
                 <DetailRow label="Client" value={selectedClient?.name} />
                 <DetailRow label="API Key" value={selectedKey ? `${selectedKey.name} / ${selectedKey.key_prefix}` : null} />
-                <DetailRow label="Request ID" value={result?.request_id} />
+                <DetailRow label="Request ID" value={displayRequestId} />
+                <DetailRow label="Execution Mode" value={result || loading ? displayMode : null} />
+                <DetailRow label="Stream Chunks" value={result || loading ? displayStreamChunks.length : null} />
                 <DetailRow label="Usage Log" value={result?.meta.usage_log_id} />
                 <DetailRow label="Usage Status" value={result?.meta.usage_status} />
                 <DetailRow label="Prompt Tokens" value={result?.meta.prompt_tokens} />
@@ -419,7 +558,16 @@ export function WorkbenchPage({ headers, setNotice }: PageProps) {
                   </Button>
                 </div>
                 <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-panel p-3 text-xs leading-5">
-                  {result ? compactJson(result) : "{}"}
+                  {result
+                    ? compactJson({
+                        ...result,
+                        diagnostics: {
+                          execution_mode: displayMode,
+                          stream_chunk_count: displayStreamChunks.length,
+                          stream_chunks: displayStreamChunks
+                        }
+                      })
+                    : "{}"}
                 </pre>
               </div>
             )}
