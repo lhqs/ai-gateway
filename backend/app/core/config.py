@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     default_timeout_seconds: float = 60.0
     default_rate_limit_per_minute: int = 120
     default_cost_currency: str = "USD"
+    store_api_key_value: bool = False
     cache_namespace: str = "ai-gateway"
     jwt_secret_key: str = "change-me-jwt-secret"
     jwt_algorithm: str = "HS256"

@@ -8,7 +8,8 @@ export const tabPaths: Record<Tab, string> = {
   models: "/models",
   pricing: "/pricing",
   routes: "/routes",
-  usage: "/usage"
+  usage: "/usage",
+  audit: "/audit"
 };
 
 const routeEntries = Object.entries(tabPaths) as Array<[Tab, string]>;

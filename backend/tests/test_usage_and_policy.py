@@ -1,6 +1,7 @@
 from app.core.errors import ProviderCallError
 from app.db.models import Provider, RouteRule
 from app.providers.gemini_native import GeminiNativeProxyAdapter
+from app.policies.rate_limit import configured_limit, strictest_limit
 from app.usage.parsers.anthropic import AnthropicUsageParser
 from app.schemas.proxy import NativeProxyRequest
 from app.services.cache_service import CacheService
@@ -61,6 +62,13 @@ def test_openai_usage_parser_extracts_cached_input_tokens():
 
     assert result.usage_status == "parsed"
     assert result.cached_input_tokens == 4
+
+
+def test_rate_limit_config_uses_strictest_configured_limit():
+    assert configured_limit({"rate_limit_per_minute": "30"}) == 30
+    assert configured_limit({"rate_limit_per_minute": "bad"}) is None
+    assert strictest_limit(None, 120, 30, 60) == 30
+    assert strictest_limit(None, None) is None
 
 
 def test_gemini_native_adapter_allows_whitelisted_paths_and_filters_headers():

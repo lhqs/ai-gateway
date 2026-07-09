@@ -1,4 +1,4 @@
-import { BookOpen, Copy, KeyRound, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Ban, BookOpen, Copy, KeyRound, Pencil, Plus, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -34,12 +34,25 @@ type KeyForm = AccessForm & {
   client_id: string;
   name: string;
   status: string;
+  expires_at: string;
+  rate_limit_per_minute: string;
 };
 
 type RemoveTarget = {
   type: "client" | "key";
   id: number;
   label: string;
+};
+
+type KeyActionTarget = {
+  type: "rotate" | "revoke";
+  key: ApiKey;
+};
+
+type GeneratedKey = {
+  id: number;
+  label: string;
+  key: string;
 };
 
 type UsageTab = "curl" | "sdk" | "env";
@@ -71,6 +84,8 @@ function defaultKeyForm(clientId = ""): KeyForm {
     client_id: clientId,
     name: "full-access-key",
     status: "active",
+    expires_at: "",
+    rate_limit_per_minute: "",
     model_aliases: "*",
     provider_names: "*",
     native_paths: "*"
@@ -111,6 +126,36 @@ function accessPayload(fullAccess: boolean, form: AccessForm) {
   };
 }
 
+function keyAccessPayload(fullAccess: boolean, form: KeyForm) {
+  const payload: Record<string, JsonValue> = accessPayload(fullAccess, form);
+  if (form.rate_limit_per_minute) {
+    payload.rate_limit_per_minute = Number(form.rate_limit_per_minute);
+  }
+  return payload;
+}
+
+function dateInputValue(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function rateLimitValue(accessConfig: Record<string, JsonValue>) {
+  const value = accessConfig.rate_limit_per_minute;
+  return typeof value === "number" || typeof value === "string" ? String(value) : "";
+}
+
 function clientFormFromClient(client: Client): ClientForm {
   return {
     name: client.name,
@@ -125,6 +170,8 @@ function keyFormFromKey(key: ApiKey): KeyForm {
     client_id: String(key.client_id),
     name: key.name,
     status: key.status,
+    expires_at: dateInputValue(key.expires_at),
+    rate_limit_per_minute: rateLimitValue(key.access_config),
     ...accessFromConfig(key.access_config)
   };
 }
@@ -230,7 +277,10 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
   const [clientPage, setClientPage] = useState(1);
   const [keyPage, setKeyPage] = useState(1);
   const [newKey, setNewKey] = useState("");
+  const [visibleKeys, setVisibleKeys] = useState<Record<number, string>>({});
+  const [generatedKey, setGeneratedKey] = useState<GeneratedKey | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RemoveTarget | null>(null);
+  const [keyActionTarget, setKeyActionTarget] = useState<KeyActionTarget | null>(null);
   const [usageTarget, setUsageTarget] = useState<ApiKey | null>(null);
   const [usageTab, setUsageTab] = useState<UsageTab>("curl");
 
@@ -335,7 +385,8 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
     const payload = {
       name: keyForm.name,
       status: keyForm.status,
-      access_config: accessPayload(keyFullAccess, keyForm)
+      expires_at: keyForm.expires_at ? new Date(keyForm.expires_at).toISOString() : null,
+      access_config: keyAccessPayload(keyFullAccess, keyForm)
     };
 
     if (isEdit) {
@@ -347,7 +398,7 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
       setKeyModalMode(null);
       setNotice("API key updated");
     } else {
-      const result = await api<{ key: string }>(
+      const result = await api<{ id: number; key: string }>(
         "/admin/api-keys",
         {
           method: "POST",
@@ -360,11 +411,47 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
         setNotice
       );
       setNewKey(result.key);
+      setVisibleKeys((values) => ({ ...values, [result.id]: result.key }));
+      setGeneratedKey({ id: result.id, label: keyForm.name, key: result.key });
       setKeyForm(defaultKeyForm(keyForm.client_id));
       setKeyFullAccess(true);
+      setKeyModalMode(null);
       setNotice("API key created");
     }
 
+    await load();
+  }
+
+  async function runKeyAction() {
+    if (!keyActionTarget) return;
+    const { key, type } = keyActionTarget;
+    if (type === "rotate") {
+      const result = await api<{ id: number; key: string }>(
+        `/admin/api-keys/${key.id}/rotate`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ revoke_old: true })
+        },
+        setNotice
+      );
+      setVisibleKeys((values) => {
+        const next = { ...values, [result.id]: result.key };
+        delete next[key.id];
+        return next;
+      });
+      setGeneratedKey({ id: result.id, label: `${key.name} rotated`, key: result.key });
+      setNotice("API key rotated");
+    } else {
+      await api<ApiKey>(`/admin/api-keys/${key.id}/revoke`, { method: "POST", headers }, setNotice);
+      setVisibleKeys((values) => {
+        const next = { ...values };
+        delete next[key.id];
+        return next;
+      });
+      setNotice("API key revoked");
+    }
+    setKeyActionTarget(null);
     await load();
   }
 
@@ -376,6 +463,13 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
         : `/admin/api-keys/${removeTarget.id}`;
 
     await api<unknown>(endpoint, { method: "DELETE", headers }, setNotice);
+    if (removeTarget.type === "key") {
+      setVisibleKeys((values) => {
+        const next = { ...values };
+        delete next[removeTarget.id];
+        return next;
+      });
+    }
     setRemoveTarget(null);
     setNotice(removeTarget.type === "client" ? "Client removed" : "API key removed");
     await load();
@@ -396,11 +490,12 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
   }
 
   function renderApiKey(key: ApiKey) {
-    if (key.key) {
+    const visibleKey = visibleKeys[key.id] || key.key;
+    if (visibleKey) {
       return (
         <div className="flex max-w-[520px] items-start gap-2">
-          <code className="min-w-0 flex-1 break-all font-mono text-xs leading-5">{key.key}</code>
-          <Button onClick={() => copyApiKey(key.key as string)} variant="light">
+          <code className="min-w-0 flex-1 break-all font-mono text-xs leading-5">{visibleKey}</code>
+          <Button onClick={() => copyApiKey(visibleKey)} variant="light">
             <Copy size={15} />
             Copy
           </Button>
@@ -474,18 +569,28 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
         }
       >
         <DataTable
-          columns={["id", "client", "name", "api key", "status", "access", "actions"]}
+          columns={["id", "client", "name", "api key", "status", "last used", "expires", "limit", "actions"]}
           rows={keys.map((key) => [
             key.id,
             clientNamesById.get(key.client_id) || key.client_id,
             key.name,
             renderApiKey(key),
             <Badge tone={key.status === "active" ? "good" : "bad"}>{key.status}</Badge>,
-            jsonPreview(key.access_config),
+            formatDateTime(key.last_used_at),
+            formatDateTime(key.expires_at),
+            rateLimitValue(key.access_config) || "default",
             <div className="flex gap-2">
               <Button onClick={() => openUsage(key)} variant="light">
                 <BookOpen size={14} />
                 Usage
+              </Button>
+              <Button onClick={() => setKeyActionTarget({ type: "rotate", key })} variant="light">
+                <RotateCw size={14} />
+                Rotate
+              </Button>
+              <Button onClick={() => setKeyActionTarget({ type: "revoke", key })} variant="light">
+                <Ban size={14} />
+                Revoke
               </Button>
               <Button onClick={() => openEditKey(key)} variant="light">
                 <Pencil size={14} />
@@ -599,6 +704,22 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
                 />
               </Field>
             </div>
+            <Field label="Expires At">
+              <Input
+                type="datetime-local"
+                value={keyForm.expires_at}
+                onChange={(event) => setKeyForm({ ...keyForm, expires_at: event.target.value })}
+              />
+            </Field>
+            <Field label="Rate Limit / Min">
+              <Input
+                type="number"
+                min="0"
+                value={keyForm.rate_limit_per_minute}
+                onChange={(event) => setKeyForm({ ...keyForm, rate_limit_per_minute: event.target.value })}
+                placeholder="default"
+              />
+            </Field>
           </div>
           <AccessFields
             form={keyForm}
@@ -712,6 +833,47 @@ export function ClientsPage({ headers, setNotice }: PageProps) {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal open={generatedKey !== null} title="API Key" onClose={() => setGeneratedKey(null)}>
+        {generatedKey && (
+          <div className="space-y-4">
+            <div className="rounded-md border border-line bg-panel p-3">
+              <div className="mb-2 text-xs font-medium text-slate-600">{generatedKey.label}</div>
+              <div className="flex items-start gap-2">
+                <code className="min-w-0 flex-1 break-all font-mono text-xs leading-5">{generatedKey.key}</code>
+                <Button onClick={() => copyApiKey(generatedKey.key)} variant="light">
+                  <Copy size={15} />
+                  Copy
+                </Button>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={() => setGeneratedKey(null)}>Done</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={keyActionTarget !== null}
+        title={keyActionTarget?.type === "rotate" ? "Rotate API Key" : "Revoke API Key"}
+        onClose={() => setKeyActionTarget(null)}
+      >
+        <div className="space-y-4">
+          <div className="rounded-md border border-line bg-panel p-3 text-sm text-slate-700">
+            {keyActionTarget?.type === "rotate"
+              ? `Rotate ${keyActionTarget.key.name}? The old key will be revoked immediately.`
+              : `Revoke ${keyActionTarget?.key.name}? Existing requests using this key will fail.`}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setKeyActionTarget(null)} variant="light">Cancel</Button>
+            <Button onClick={runKeyAction}>
+              {keyActionTarget?.type === "rotate" ? <RotateCw size={15} /> : <Ban size={15} />}
+              {keyActionTarget?.type === "rotate" ? "Rotate" : "Revoke"}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       <Modal

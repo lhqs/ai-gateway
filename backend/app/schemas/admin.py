@@ -41,10 +41,23 @@ class ApiKeyCreate(BaseModel):
     access_config: dict[str, Any] = Field(default_factory=dict)
 
 
+class ApiKeyPatch(BaseModel):
+    name: str | None = None
+    status: str | None = None
+    expires_at: datetime | None = None
+    access_config: dict[str, Any] | None = None
+
+
 class ApiKeyCreated(BaseModel):
     id: int
     key: str
     key_prefix: str
+
+
+class ApiKeyRotateRequest(BaseModel):
+    name: str | None = None
+    revoke_old: bool = True
+    grace_period_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
 class ApiKeyRead(BaseModel):
@@ -65,6 +78,28 @@ class ApiKeyRead(BaseModel):
 
 class ApiKeyPage(BaseModel):
     items: list[ApiKeyRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class AdminAuditLogRead(BaseModel):
+    id: int
+    user_id: int | None
+    action: str
+    resource_type: str | None
+    resource_id: str | None
+    request_id: str | None
+    ip_address: str | None
+    user_agent: str | None
+    detail: dict[str, Any] | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AdminAuditLogPage(BaseModel):
+    items: list[AdminAuditLogRead]
     total: int
     limit: int
     offset: int

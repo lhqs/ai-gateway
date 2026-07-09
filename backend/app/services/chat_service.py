@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.errors import ProviderCallError
 from app.core.security import AuthContext
 from app.db.models import Model, Provider
+from app.policies.rate_limit import RateLimiter, configured_limit, strictest_limit
 from app.repositories.cache_entries import CacheEntryRepository
 from app.schemas.chat import ChatCompletionRequest, GatewayChatRequest, GatewayChatResponse
 from app.services.cache_service import CacheService
@@ -30,6 +31,7 @@ class ChatService:
         self.health = ProviderHealthService(session)
         self.usage = UsageService(session)
         self.access_policy = AccessPolicyService()
+        self.rate_limiter = RateLimiter(cache.redis)
         self.settings = get_settings()
 
     def _cost_currency(self, auth: AuthContext) -> str:
@@ -41,6 +43,16 @@ class ChatService:
         data.setdefault("api_key_id", auth.api_key.id)
         data.setdefault("cost_currency", self._cost_currency(auth))
         await self.usage.record(**data)
+
+    async def _check_rate_limit(self, auth: AuthContext, request_scope: str) -> None:
+        limit = strictest_limit(
+            configured_limit(auth.client.access_config),
+            configured_limit(auth.api_key.access_config),
+        )
+        await self.rate_limiter.check(
+            f"chat-rate:{auth.client.id}:{auth.api_key.id}:{request_scope}",
+            limit,
+        )
 
     async def _build_attempts(
         self, auth: AuthContext, payload: ChatCompletionRequest, route
@@ -65,6 +77,7 @@ class ChatService:
     async def complete(
         self, auth: AuthContext, request_id: str, payload: ChatCompletionRequest
     ) -> dict[str, Any]:
+        await self._check_rate_limit(auth, "complete")
         started = time.perf_counter()
         route = await self.routing.resolve(payload.model)
         self.access_policy.ensure_chat_allowed(auth, payload.model, route.provider, route.model)
@@ -246,6 +259,7 @@ class ChatService:
     async def complete_stream(
         self, auth: AuthContext, request_id: str, payload: ChatCompletionRequest
     ):
+        await self._check_rate_limit(auth, "stream")
         route = await self.routing.resolve(payload.model)
         self.access_policy.ensure_chat_allowed(auth, payload.model, route.provider, route.model)
         body = payload.model_dump(exclude_none=True)

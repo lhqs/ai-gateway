@@ -1,4 +1,4 @@
-export type Tab = "dashboard" | "workbench" | "clients" | "providers" | "models" | "pricing" | "routes" | "usage";
+export type Tab = "dashboard" | "workbench" | "clients" | "providers" | "models" | "pricing" | "routes" | "usage" | "audit";
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -61,6 +61,19 @@ export type ApiKey = {
   access_config: Record<string, JsonValue>;
   last_used_at: string | null;
   expires_at: string | null;
+};
+
+export type AdminAuditLog = {
+  id: number;
+  user_id: number | null;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  request_id: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  detail: Record<string, JsonValue> | null;
+  created_at: string;
 };
 
 export type Provider = {

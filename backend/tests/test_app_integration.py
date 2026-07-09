@@ -341,6 +341,65 @@ async def test_admin_clients_and_keys_pagination_and_delete(app_client):
 
 
 @pytest.mark.asyncio
+async def test_api_key_rotate_revoke_and_audit_log(app_client):
+    client = app_client
+    created_client = (await client.post("/admin/clients", json={"name": "secure-client"})).json()
+    key_payload = (
+        await client.post(
+            "/admin/api-keys",
+            json={
+                "client_id": created_client["id"],
+                "name": "primary-key",
+                "access_config": {"rate_limit_per_minute": 3},
+            },
+        )
+    ).json()
+
+    rotate_response = await client.post(f"/admin/api-keys/{key_payload['id']}/rotate", json={})
+    rotated = rotate_response.json()
+    assert rotate_response.status_code == 200
+    assert rotated["id"] != key_payload["id"]
+    assert rotated["key"].startswith("lhqs_")
+
+    keys = (await client.get("/admin/api-keys?limit=10")).json()["items"]
+    old_key = next(item for item in keys if item["id"] == key_payload["id"])
+    new_key = next(item for item in keys if item["id"] == rotated["id"])
+    assert old_key["status"] == "disabled"
+    assert new_key["status"] == "active"
+    assert new_key["access_config"]["rate_limit_per_minute"] == 3
+
+    revoke_response = await client.post(f"/admin/api-keys/{rotated['id']}/revoke")
+    assert revoke_response.status_code == 200
+    assert revoke_response.json()["status"] == "disabled"
+
+    audit = (await client.get("/admin/audit-logs", params={"resource_type": "api_key"})).json()
+    actions = [item["action"] for item in audit["items"]]
+    assert "api_key.create" in actions
+    assert "api_key.rotate" in actions
+    assert "api_key.revoke" in actions
+    serialized_details = "\n".join(json.dumps(item["detail"] or {}) for item in audit["items"])
+    assert key_payload["key"] not in serialized_details
+    assert rotated["key"] not in serialized_details
+
+
+@pytest.mark.asyncio
+async def test_store_api_key_value_can_be_enabled(app_client, monkeypatch):
+    client = app_client
+    monkeypatch.setenv("STORE_API_KEY_VALUE", "true")
+    get_settings.cache_clear()
+
+    created_client = (await client.post("/admin/clients", json={"name": "stored-key-client"})).json()
+    key_payload = (
+        await client.post("/admin/api-keys", json={"client_id": created_client["id"], "name": "key"})
+    ).json()
+    listed = (await client.get("/admin/api-keys")).json()["items"][0]
+
+    assert listed["key"] == key_payload["key"]
+    monkeypatch.setenv("STORE_API_KEY_VALUE", "false")
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_admin_providers_pagination_and_delete_cleanup(app_client):
     client = app_client
     provider_one = (
@@ -637,7 +696,9 @@ async def test_admin_config_to_chat_usage_log(app_client, monkeypatch):
         )
     ).json()
     api_keys = (await client.get("/admin/api-keys")).json()["items"]
-    assert api_keys[0]["key"] == key_payload["key"]
+    assert key_payload["key"].startswith("lhqs_")
+    assert api_keys[0]["key"] is None
+    assert api_keys[0]["key_prefix"] == key_payload["key_prefix"]
     assert "key_hash" not in api_keys[0]
     provider = (
         await client.post(

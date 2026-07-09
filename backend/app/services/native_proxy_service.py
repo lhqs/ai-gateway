@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.core.errors import ProviderCallError
 from app.core.security import AuthContext
 from app.db.models import Model, Provider
-from app.policies.rate_limit import RateLimiter
+from app.policies.rate_limit import RateLimiter, configured_limit, strictest_limit
 from app.providers.registry import registry
 from app.repositories.models import ModelRepository
 from app.repositories.providers import ProviderRepository
@@ -59,6 +59,17 @@ class NativeProxyService:
         data.setdefault("api_key_id", auth.api_key.id)
         data.setdefault("cost_currency", self._cost_currency(auth))
         await self.usage.record(**data)
+
+    async def _check_rate_limit(self, auth: AuthContext, provider: Provider, request_scope: str) -> None:
+        limit = strictest_limit(
+            configured_limit(auth.client.access_config),
+            configured_limit(auth.api_key.access_config),
+            provider.native_rate_limit_per_minute,
+        )
+        await self.rate_limiter.check(
+            f"native-rate:{auth.client.id}:{auth.api_key.id}:{provider.id}:{request_scope}",
+            limit,
+        )
 
     async def _build_request(
         self,
@@ -187,9 +198,7 @@ class NativeProxyService:
                 usage_status="failed",
             )
             raise
-        await self.rate_limiter.check(
-            f"native-rate:{auth.client.id}:{provider.id}", provider.native_rate_limit_per_minute
-        )
+        await self._check_rate_limit(auth, provider, "forward")
         native_request = await self._build_request(
             request_id, provider_name, path_target.upstream_path, method, request
         )
@@ -338,9 +347,7 @@ class NativeProxyService:
                 usage_status="failed",
             )
             raise
-        await self.rate_limiter.check(
-            f"native-rate:{auth.client.id}:{provider.id}", provider.native_rate_limit_per_minute
-        )
+        await self._check_rate_limit(auth, provider, "stream")
         native_request = await self._build_request(
             request_id, provider_name, path_target.upstream_path, method, request
         )

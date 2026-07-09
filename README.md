@@ -83,7 +83,15 @@ OpenAI 兼容 / Gemini 原生 · 多供应商路由 · 自动故障转移 · 限
 ```bash
 cd backend
 uv sync --dev
+cp .env.example .env
 uv run uvicorn app.main:app --reload
+```
+
+首次使用 PostgreSQL 时，按编号顺序执行 SQL 脚本：
+
+```bash
+cd backend
+for file in app/db/sql/*.sql; do psql "$POSTGRES_DSN" -v ON_ERROR_STOP=1 -f "$file"; done
 ```
 
 ### 前端
@@ -91,6 +99,7 @@ uv run uvicorn app.main:app --reload
 ```bash
 cd frontend
 npm install
+cp .env.example .env
 npm run dev
 ```
 
@@ -134,10 +143,12 @@ lhqs-ai-gateway/
 - [AI 网关方案 V3](docs/ai-gateway-plan/ai-gateway-plan-v3.md)
 - [AI 模型定价设计](docs/ai-gateway-plan/ai-model-pricing-design.md)
 - [定价系统设计 V2](docs/ai-gateway-plan/pricing-system-design-v2.md)
+- [生产环境与排障手册](docs/production-operations.md)
 
 ## 📌 说明
 
 - 后端数据库变更以 `backend/app/db/sql/` 下编号 SQL 脚本管理，**不使用 Alembic**，**不使用外键**，关系由应用层保证。
+- 生产环境建议保持 `STORE_API_KEY_VALUE=false`，完整 API Key 只在创建或轮换时展示一次。
 - 欢迎 Issue / PR。涉及前端可见变更的 PR，请附截图。
 
 <div align="center">

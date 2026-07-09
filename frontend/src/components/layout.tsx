@@ -1,4 +1,4 @@
-import { Activity, Bot, Database, DollarSign, ListFilter, LogOut, PanelLeftClose, PanelLeftOpen, Route, ServerCog, Users } from "lucide-react";
+import { Activity, Bot, ClipboardList, Database, DollarSign, ListFilter, LogOut, PanelLeftClose, PanelLeftOpen, Route, ServerCog, Users } from "lucide-react";
 import { useState } from "react";
 import type React from "react";
 
@@ -13,7 +13,8 @@ export const nav: Array<{ key: Tab; label: string; path: string; icon: React.Com
   { key: "models", label: "Models & Aliases", path: tabPaths.models, icon: Database },
   { key: "pricing", label: "Pricing", path: tabPaths.pricing, icon: DollarSign },
   { key: "routes", label: "Routes", path: tabPaths.routes, icon: Route },
-  { key: "usage", label: "Usage Logs", path: tabPaths.usage, icon: ListFilter }
+  { key: "usage", label: "Usage Logs", path: tabPaths.usage, icon: ListFilter },
+  { key: "audit", label: "Audit Logs", path: tabPaths.audit, icon: ClipboardList }
 ];
 
 export function AppLayout({

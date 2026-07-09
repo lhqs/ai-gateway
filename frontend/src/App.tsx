@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { AppLayout } from "./components/layout";
+import { AuditLogsPage } from "./pages/AuditLogsPage";
 import { ClientsPage } from "./pages/ClientsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ModelsPage } from "./pages/ModelsPage";
@@ -133,6 +134,7 @@ export function App() {
       {tab === "pricing" && <PricingPage headers={headers} setNotice={setNotice} />}
       {tab === "routes" && <RoutesPage headers={headers} setNotice={setNotice} />}
       {tab === "usage" && <UsagePage headers={headers} setNotice={setNotice} />}
+      {tab === "audit" && <AuditLogsPage headers={headers} setNotice={setNotice} />}
     </AppLayout>
   );
 }

@@ -14,12 +14,24 @@ class ApiKeyRepository(Repository[ApiKey]):
             select(ApiKey).where(ApiKey.key_hash == key_hash, ApiKey.status == "active")
         )
 
+    async def get_by_hash(self, key_hash: str) -> ApiKey | None:
+        return await self.session.scalar(select(ApiKey).where(ApiKey.key_hash == key_hash))
+
     async def mark_used(self, key_id: int) -> None:
         await self.session.execute(
             update(ApiKey)
             .where(ApiKey.id == key_id)
             .values(last_used_at=datetime.now(timezone.utc))
         )
+
+    async def revoke(self, key_id: int) -> ApiKey | None:
+        item = await self.get(key_id)
+        if not item:
+            return None
+        item.status = "disabled"
+        await self.session.flush()
+        await self.session.refresh(item)
+        return item
 
     async def list_public(self, limit: int = 100, offset: int = 0) -> list[ApiKey]:
         result = await self.session.scalars(

@@ -1,13 +1,16 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, session_dep
-from app.core.security import generate_api_key, hash_api_key
+from app.core.config import get_settings
+from app.core.security import AdminAuthContext, generate_api_key, hash_api_key
 from app.db.models import ApiKey, Client, Model, ModelAlias, Provider, RouteRule, UsageLog
+from app.repositories.admin_audit_logs import AdminAuditLogRepository
 from app.repositories.api_keys import ApiKeyRepository
 from app.repositories.base import Repository
 from app.repositories.clients import ClientRepository
@@ -17,10 +20,13 @@ from app.repositories.providers import ProviderRepository
 from app.repositories.route_rules import RouteRuleRepository
 from app.repositories.usage_logs import UsageLogRepository
 from app.schemas.admin import (
+    AdminAuditLogPage,
     ApiKeyCreate,
     ApiKeyCreated,
+    ApiKeyPatch,
     ApiKeyPage,
     ApiKeyRead,
+    ApiKeyRotateRequest,
     ClientCreate,
     ClientPage,
     ClientPatch,
@@ -54,6 +60,53 @@ from app.schemas.usage import UsageLogPage, UsageSummaryPage
 from app.services.provider_health_service import ProviderHealthService
 
 router = APIRouter(dependencies=[Depends(require_admin)])
+
+
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    return request.client.host if request.client else None
+
+
+def _redact_detail(value: Any) -> Any:
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = key.lower()
+            if lowered in {"key", "key_value", "raw_key", "api_key", "encrypted_api_key"}:
+                redacted[key] = "[redacted]"
+            else:
+                redacted[key] = _redact_detail(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_detail(item) for item in value]
+    return value
+
+
+async def _audit(
+    session: AsyncSession,
+    auth: AdminAuthContext | None,
+    request: Request,
+    action: str,
+    *,
+    resource_type: str,
+    resource_id: int | str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    await AdminAuditLogRepository(session).record(
+        action,
+        user_id=auth.user.id if auth else None,
+        resource_type=resource_type,
+        resource_id=str(resource_id) if resource_id is not None else None,
+        ip_address=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        detail=_redact_detail(detail) if detail is not None else None,
+    )
 
 
 def _usage_filters(
@@ -299,6 +352,10 @@ async def _ensure_valid_route_rule(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.errors[0])
 
 
+def _stored_api_key_value(raw_key: str) -> str | None:
+    return raw_key if get_settings().store_api_key_value else None
+
+
 @router.get("/clients", response_model=ClientPage)
 async def list_clients(
     limit: int = Query(default=100, ge=1, le=1000),
@@ -315,27 +372,78 @@ async def list_clients(
 
 
 @router.post("/clients", response_model=ClientRead)
-async def create_client(payload: ClientCreate, session: AsyncSession = Depends(session_dep)):
-    return await ClientRepository(session).create(payload.model_dump())
+async def create_client(
+    payload: ClientCreate,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    item = await ClientRepository(session).create(payload.model_dump())
+    await _audit(
+        session,
+        auth,
+        request,
+        "client.create",
+        resource_type="client",
+        resource_id=item.id,
+        detail=payload.model_dump(),
+    )
+    return item
 
 
 @router.patch("/clients/{item_id}", response_model=ClientRead)
-async def update_client(item_id: int, payload: ClientPatch, session: AsyncSession = Depends(session_dep)):
-    return await _patch(ClientRepository(session), item_id, payload.model_dump(exclude_unset=True))
+async def update_client(
+    item_id: int,
+    payload: ClientPatch,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    data = payload.model_dump(exclude_unset=True)
+    item = await _patch(ClientRepository(session), item_id, data)
+    await _audit(
+        session,
+        auth,
+        request,
+        "client.update",
+        resource_type="client",
+        resource_id=item_id,
+        detail=data,
+    )
+    return item
 
 
 @router.delete("/clients/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_client(item_id: int, session: AsyncSession = Depends(session_dep)):
+async def delete_client(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = ClientRepository(session)
     item = await repo.get(item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     await ApiKeyRepository(session).delete_for_client(item_id)
     await repo.delete(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "client.delete",
+        resource_type="client",
+        resource_id=item_id,
+        detail={"name": item.name},
+    )
 
 
 @router.post("/api-keys", response_model=ApiKeyCreated)
-async def create_api_key(payload: ApiKeyCreate, session: AsyncSession = Depends(session_dep)):
+async def create_api_key(
+    payload: ApiKeyCreate,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     raw_key, prefix = generate_api_key()
     item = await ApiKeyRepository(session).create(
         {
@@ -343,11 +451,26 @@ async def create_api_key(payload: ApiKeyCreate, session: AsyncSession = Depends(
             "name": payload.name,
             "key_prefix": prefix,
             "key_hash": hash_api_key(raw_key),
-            "key_value": raw_key,
+            "key_value": _stored_api_key_value(raw_key),
             "expires_at": payload.expires_at,
             "access_config": payload.access_config,
             "status": "active",
         }
+    )
+    await _audit(
+        session,
+        auth,
+        request,
+        "api_key.create",
+        resource_type="api_key",
+        resource_id=item.id,
+        detail={
+            "client_id": payload.client_id,
+            "name": payload.name,
+            "key_prefix": prefix,
+            "expires_at": payload.expires_at.isoformat() if payload.expires_at else None,
+            "access_config": payload.access_config,
+        },
     )
     return ApiKeyCreated(id=item.id, key=raw_key, key_prefix=prefix)
 
@@ -367,18 +490,121 @@ async def list_api_keys(
     }
 
 
-@router.patch("/api-keys/{item_id}")
-async def update_api_key(item_id: int, payload: dict[str, Any], session: AsyncSession = Depends(session_dep)):
-    return await _patch(ApiKeyRepository(session), item_id, payload)
+@router.patch("/api-keys/{item_id}", response_model=ApiKeyRead)
+async def update_api_key(
+    item_id: int,
+    payload: ApiKeyPatch,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    data = payload.model_dump(exclude_unset=True)
+    item = await _patch(ApiKeyRepository(session), item_id, data)
+    await _audit(
+        session,
+        auth,
+        request,
+        "api_key.update",
+        resource_type="api_key",
+        resource_id=item_id,
+        detail=data,
+    )
+    return item
+
+
+@router.post("/api-keys/{item_id}/rotate", response_model=ApiKeyCreated)
+async def rotate_api_key(
+    item_id: int,
+    payload: ApiKeyRotateRequest,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    repo = ApiKeyRepository(session)
+    old_key = await repo.get(item_id)
+    if not old_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    raw_key, prefix = generate_api_key()
+    new_key = await repo.create(
+        {
+            "client_id": old_key.client_id,
+            "name": payload.name or f"{old_key.name}-rotated",
+            "key_prefix": prefix,
+            "key_hash": hash_api_key(raw_key),
+            "key_value": _stored_api_key_value(raw_key),
+            "expires_at": old_key.expires_at,
+            "access_config": old_key.access_config or {},
+            "status": "active",
+        }
+    )
+    if payload.revoke_old:
+        old_key.status = "disabled"
+    elif payload.grace_period_seconds > 0:
+        grace_expires_at = datetime.now(timezone.utc) + timedelta(seconds=payload.grace_period_seconds)
+        if not old_key.expires_at or old_key.expires_at > grace_expires_at:
+            old_key.expires_at = grace_expires_at
+    await session.flush()
+    await _audit(
+        session,
+        auth,
+        request,
+        "api_key.rotate",
+        resource_type="api_key",
+        resource_id=item_id,
+        detail={
+            "new_api_key_id": new_key.id,
+            "new_key_prefix": prefix,
+            "old_key_status": old_key.status,
+            "revoke_old": payload.revoke_old,
+            "grace_period_seconds": payload.grace_period_seconds,
+        },
+    )
+    return ApiKeyCreated(id=new_key.id, key=raw_key, key_prefix=prefix)
+
+
+@router.post("/api-keys/{item_id}/revoke", response_model=ApiKeyRead)
+async def revoke_api_key(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    item = await ApiKeyRepository(session).revoke(item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    await _audit(
+        session,
+        auth,
+        request,
+        "api_key.revoke",
+        resource_type="api_key",
+        resource_id=item_id,
+        detail={"key_prefix": item.key_prefix},
+    )
+    return item
 
 
 @router.delete("/api-keys/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_api_key(item_id: int, session: AsyncSession = Depends(session_dep)):
+async def delete_api_key(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = ApiKeyRepository(session)
     item = await repo.get(item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     await repo.delete(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "api_key.delete",
+        resource_type="api_key",
+        resource_id=item_id,
+        detail={"key_prefix": item.key_prefix, "name": item.name},
+    )
 
 
 @router.get("/providers", response_model=ProviderPage)
@@ -405,17 +631,54 @@ async def provider_config_schema(provider_type: str):
 
 
 @router.post("/providers", response_model=ProviderRead)
-async def create_provider(payload: ProviderWrite, session: AsyncSession = Depends(session_dep)):
-    return await ProviderRepository(session).create(payload.model_dump())
+async def create_provider(
+    payload: ProviderWrite,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    item = await ProviderRepository(session).create(payload.model_dump())
+    await _audit(
+        session,
+        auth,
+        request,
+        "provider.create",
+        resource_type="provider",
+        resource_id=item.id,
+        detail=payload.model_dump(),
+    )
+    return item
 
 
 @router.patch("/providers/{item_id}", response_model=ProviderRead)
-async def update_provider(item_id: int, payload: ProviderPatch, session: AsyncSession = Depends(session_dep)):
-    return await _patch(ProviderRepository(session), item_id, payload.model_dump(exclude_unset=True))
+async def update_provider(
+    item_id: int,
+    payload: ProviderPatch,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    data = payload.model_dump(exclude_unset=True)
+    item = await _patch(ProviderRepository(session), item_id, data)
+    await _audit(
+        session,
+        auth,
+        request,
+        "provider.update",
+        resource_type="provider",
+        resource_id=item_id,
+        detail=data,
+    )
+    return item
 
 
 @router.delete("/providers/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_provider(item_id: int, session: AsyncSession = Depends(session_dep)):
+async def delete_provider(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = ProviderRepository(session)
     item = await repo.get(item_id)
     if not item:
@@ -426,6 +689,15 @@ async def delete_provider(item_id: int, session: AsyncSession = Depends(session_
     await RouteRuleRepository(session).remove_model_references(model_ids)
     await model_repo.delete_for_provider(item_id)
     await repo.delete(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "provider.delete",
+        resource_type="provider",
+        resource_id=item_id,
+        detail={"name": item.name, "deleted_model_ids": model_ids},
+    )
 
 
 @router.post("/providers/{item_id}/test")
@@ -452,23 +724,69 @@ async def list_models(
 
 
 @router.post("/models", response_model=ModelRead)
-async def create_model(payload: ModelWrite, session: AsyncSession = Depends(session_dep)):
-    return await ModelRepository(session).create(payload.model_dump())
+async def create_model(
+    payload: ModelWrite,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    item = await ModelRepository(session).create(payload.model_dump())
+    await _audit(
+        session,
+        auth,
+        request,
+        "model.create",
+        resource_type="model",
+        resource_id=item.id,
+        detail=payload.model_dump(),
+    )
+    return item
 
 
 @router.patch("/models/{item_id}", response_model=ModelRead)
-async def update_model(item_id: int, payload: ModelPatch, session: AsyncSession = Depends(session_dep)):
-    return await _patch(ModelRepository(session), item_id, payload.model_dump(exclude_unset=True))
+async def update_model(
+    item_id: int,
+    payload: ModelPatch,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    data = payload.model_dump(exclude_unset=True)
+    item = await _patch(ModelRepository(session), item_id, data)
+    await _audit(
+        session,
+        auth,
+        request,
+        "model.update",
+        resource_type="model",
+        resource_id=item_id,
+        detail=data,
+    )
+    return item
 
 
 @router.delete("/models/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_model(item_id: int, session: AsyncSession = Depends(session_dep)):
+async def delete_model(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = ModelRepository(session)
     item = await repo.get(item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     await RouteRuleRepository(session).remove_model_references([item_id])
     await repo.delete(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "model.delete",
+        resource_type="model",
+        resource_id=item_id,
+        detail={"name": item.name, "provider_id": item.provider_id},
+    )
 
 
 @router.get("/model-price-configs", response_model=ModelPriceConfigPage)
@@ -507,17 +825,34 @@ async def list_model_price_configs(
 
 @router.post("/model-price-configs", response_model=ModelPriceConfigRead)
 async def create_model_price_config(
-    payload: ModelPriceConfigWrite, session: AsyncSession = Depends(session_dep)
+    payload: ModelPriceConfigWrite,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
 ):
     data = payload.model_dump(exclude_none=True)
     model = await _ensure_price_model_provider(session, payload.provider_id, payload.model_id)
     data = _normalize_price_payload(data, model)
-    return await ModelPriceConfigRepository(session).create(data)
+    item = await ModelPriceConfigRepository(session).create(data)
+    await _audit(
+        session,
+        auth,
+        request,
+        "pricing.create",
+        resource_type="model_price_config",
+        resource_id=item.id,
+        detail=data,
+    )
+    return item
 
 
 @router.patch("/model-price-configs/{item_id}", response_model=ModelPriceConfigRead)
 async def update_model_price_config(
-    item_id: int, payload: ModelPriceConfigPatch, session: AsyncSession = Depends(session_dep)
+    item_id: int,
+    payload: ModelPriceConfigPatch,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
 ):
     repo = ModelPriceConfigRepository(session)
     item = await repo.get(item_id)
@@ -532,16 +867,39 @@ async def update_model_price_config(
         setattr(item, key, value)
     await session.flush()
     await session.refresh(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "pricing.update",
+        resource_type="model_price_config",
+        resource_id=item_id,
+        detail=data,
+    )
     return item
 
 
 @router.delete("/model-price-configs/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_model_price_config(item_id: int, session: AsyncSession = Depends(session_dep)):
+async def delete_model_price_config(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = ModelPriceConfigRepository(session)
     item = await repo.get(item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     await repo.delete(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "pricing.delete",
+        resource_type="model_price_config",
+        resource_id=item_id,
+        detail={"provider_id": item.provider_id, "model_id": item.model_id},
+    )
 
 
 class ModelAliasRepository(Repository[ModelAlias]):
@@ -564,23 +922,69 @@ async def list_aliases(
 
 
 @router.post("/model-aliases", response_model=ModelAliasRead)
-async def create_alias(payload: ModelAliasWrite, session: AsyncSession = Depends(session_dep)):
-    return await ModelAliasRepository(session).create(payload.model_dump())
+async def create_alias(
+    payload: ModelAliasWrite,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    item = await ModelAliasRepository(session).create(payload.model_dump())
+    await _audit(
+        session,
+        auth,
+        request,
+        "model_alias.create",
+        resource_type="model_alias",
+        resource_id=item.id,
+        detail=payload.model_dump(),
+    )
+    return item
 
 
 @router.patch("/model-aliases/{item_id}", response_model=ModelAliasRead)
-async def update_alias(item_id: int, payload: ModelAliasPatch, session: AsyncSession = Depends(session_dep)):
-    return await _patch(ModelAliasRepository(session), item_id, payload.model_dump(exclude_unset=True))
+async def update_alias(
+    item_id: int,
+    payload: ModelAliasPatch,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
+    data = payload.model_dump(exclude_unset=True)
+    item = await _patch(ModelAliasRepository(session), item_id, data)
+    await _audit(
+        session,
+        auth,
+        request,
+        "model_alias.update",
+        resource_type="model_alias",
+        resource_id=item_id,
+        detail=data,
+    )
+    return item
 
 
 @router.delete("/model-aliases/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_alias(item_id: int, session: AsyncSession = Depends(session_dep)):
+async def delete_alias(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = ModelAliasRepository(session)
     item = await repo.get(item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     await RouteRuleRepository(session).delete_for_alias(item_id)
     await repo.delete(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "model_alias.delete",
+        resource_type="model_alias",
+        resource_id=item_id,
+        detail={"alias": item.alias},
+    )
 
 
 @router.get("/route-rules", response_model=RouteRulePage)
@@ -606,13 +1010,34 @@ async def validate_route_rule(
 
 
 @router.post("/route-rules", response_model=RouteRuleRead)
-async def create_route_rule(payload: RouteRuleWrite, session: AsyncSession = Depends(session_dep)):
+async def create_route_rule(
+    payload: RouteRuleWrite,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     await _ensure_valid_route_rule(session, RouteRuleValidateRequest(**payload.model_dump()))
-    return await RouteRuleRepository(session).create(payload.model_dump())
+    item = await RouteRuleRepository(session).create(payload.model_dump())
+    await _audit(
+        session,
+        auth,
+        request,
+        "route_rule.create",
+        resource_type="route_rule",
+        resource_id=item.id,
+        detail=payload.model_dump(),
+    )
+    return item
 
 
 @router.patch("/route-rules/{item_id}", response_model=RouteRuleRead)
-async def update_route_rule(item_id: int, payload: RouteRulePatch, session: AsyncSession = Depends(session_dep)):
+async def update_route_rule(
+    item_id: int,
+    payload: RouteRulePatch,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = RouteRuleRepository(session)
     item = await repo.get(item_id)
     if not item:
@@ -651,20 +1076,75 @@ async def update_route_rule(item_id: int, payload: RouteRulePatch, session: Asyn
         cache_scope=payload.cache_scope if payload.cache_scope is not None else item.cache_scope,
     )
     await _ensure_valid_route_rule(session, merged)
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    for key, value in data.items():
         setattr(item, key, value)
     await session.flush()
     await session.refresh(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "route_rule.update",
+        resource_type="route_rule",
+        resource_id=item_id,
+        detail=data,
+    )
     return item
 
 
 @router.delete("/route-rules/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_route_rule(item_id: int, session: AsyncSession = Depends(session_dep)):
+async def delete_route_rule(
+    item_id: int,
+    request: Request,
+    session: AsyncSession = Depends(session_dep),
+    auth: AdminAuthContext = Depends(require_admin),
+):
     repo = RouteRuleRepository(session)
     item = await repo.get(item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     await repo.delete(item)
+    await _audit(
+        session,
+        auth,
+        request,
+        "route_rule.delete",
+        resource_type="route_rule",
+        resource_id=item_id,
+        detail={"model_alias_id": item.model_alias_id},
+    )
+
+
+@router.get("/audit-logs", response_model=AdminAuditLogPage)
+async def list_audit_logs(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    action: str | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    user_id: int | None = None,
+    session: AsyncSession = Depends(session_dep),
+):
+    repo = AdminAuditLogRepository(session)
+    return {
+        "items": await repo.list_filtered(
+            limit=limit,
+            offset=offset,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            user_id=user_id,
+        ),
+        "total": await repo.count_filtered(
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            user_id=user_id,
+        ),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/usage-logs", response_model=UsageLogPage)
