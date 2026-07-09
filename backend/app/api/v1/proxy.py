@@ -1,10 +1,9 @@
-import uuid
-
 from fastapi import APIRouter, Depends, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_auth_context, get_redis, session_dep
+from app.core.request_logging import get_request_id
 from app.core.security import AuthContext
 from app.services.native_proxy_service import NativeProxyService
 
@@ -26,7 +25,7 @@ async def proxy_get(
     redis: Redis | None = Depends(get_redis),
     auth: AuthContext = Depends(get_auth_context),
 ):
-    request_id = uuid.uuid4().hex
+    request_id = get_request_id(request)
     service = NativeProxyService(session, redis)
     if _wants_stream(native_path, request):
         return await service.stream(auth, request_id, provider, native_path, "GET", request)
@@ -44,7 +43,7 @@ async def proxy_post(
     redis: Redis | None = Depends(get_redis),
     auth: AuthContext = Depends(get_auth_context),
 ):
-    request_id = uuid.uuid4().hex
+    request_id = get_request_id(request)
     service = NativeProxyService(session, redis)
     if _wants_stream(native_path, request):
         return await service.stream(auth, request_id, provider, native_path, "POST", request)

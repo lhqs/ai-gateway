@@ -5,7 +5,12 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.security import AdminAuthContext, AuthContext, authenticate_api_key, verify_admin_token
+from app.core.security import (
+    AdminAuthContext,
+    AuthContext,
+    authenticate_api_key,
+    verify_admin_token,
+)
 from app.db.session import get_db_session
 from app.services.admin_auth_service import AdminAuthService
 
@@ -32,13 +37,19 @@ async def session_dep() -> AsyncIterator[AsyncSession]:
 
 
 async def get_auth_context(
+    request: Request,
     session: AsyncSession = Depends(session_dep),
     authorization: str | None = Header(default=None),
 ) -> AuthContext:
-    return await authenticate_api_key(session, authorization)
+    auth = await authenticate_api_key(session, authorization)
+    request.state.request_auth_source = "api_key"
+    request.state.request_client_id = auth.client.id
+    request.state.request_api_key_id = auth.api_key.id
+    return auth
 
 
 async def get_admin_context(
+    request: Request,
     session: AsyncSession = Depends(session_dep),
     authorization: str | None = Header(default=None),
 ) -> AdminAuthContext:
@@ -46,6 +57,8 @@ async def get_admin_context(
         raise HTTPException(status_code=401, detail="Missing admin token")
     access_token = authorization.split(" ", 1)[1].strip()
     user = await AdminAuthService(session, get_settings()).authenticate_access_token(access_token)
+    request.state.request_auth_source = "admin"
+    request.state.request_admin_user_id = user.id
     return AdminAuthContext(user=user)
 
 

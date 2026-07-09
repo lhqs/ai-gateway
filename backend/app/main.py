@@ -7,6 +7,12 @@ from redis.asyncio import Redis
 from app.api.v1 import auth, chat, proxy
 from app.api.v1.admin import resources, workbench
 from app.core.config import get_settings
+from app.core.exception_handlers import register_exception_handlers
+from app.core.logging import configure_logging
+from app.core.request_logging import RequestLoggingMiddleware
+
+
+configure_logging()
 
 
 @asynccontextmanager
@@ -27,6 +33,8 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    register_exception_handlers(app)
+    app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,

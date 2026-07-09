@@ -1,15 +1,15 @@
 import json
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_redis, require_admin, session_dep
+from app.core.request_logging import get_request_id
 from app.core.security import AuthContext
 from app.db.models import UsageLog
 from app.repositories.api_keys import ApiKeyRepository
@@ -26,7 +26,10 @@ async def _auth_context_for_api_key(session: AsyncSession, api_key_id: int) -> A
     api_key_repo = ApiKeyRepository(session)
     api_key = await api_key_repo.get(api_key_id)
     if not api_key or api_key.status != "active":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active API key not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active API key not found",
+        )
     if api_key.expires_at and api_key.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key expired")
     client = await ClientRepository(session).get_active(api_key.client_id)
@@ -91,18 +94,24 @@ def _stream_delta_from_chunk(data: bytes) -> str:
 
 async def _usage_log_for_request(session: AsyncSession, request_id: str) -> UsageLog | None:
     return await session.scalar(
-        select(UsageLog).where(UsageLog.request_id == request_id).order_by(desc(UsageLog.id)).limit(1)
+        select(UsageLog)
+        .where(UsageLog.request_id == request_id)
+        .order_by(desc(UsageLog.id))
+        .limit(1)
     )
 
 
 @router.post("/chat-test", response_model=WorkbenchChatTestResponse)
 async def chat_test(
     payload: WorkbenchChatTestRequest,
+    request: Request,
     session: AsyncSession = Depends(session_dep),
     redis: Redis | None = Depends(get_redis),
 ):
-    request_id = uuid.uuid4().hex
+    request_id = get_request_id(request)
     auth = await _auth_context_for_api_key(session, payload.api_key_id)
+    request.state.request_client_id = auth.client.id
+    request.state.request_api_key_id = auth.api_key.id
     chat_payload = ChatCompletionRequest.model_validate(payload.model_dump(exclude={"api_key_id"}))
     chat_service = ChatService(session, CacheService(redis))
     if payload.stream:
@@ -130,11 +139,14 @@ async def chat_test(
 @router.post("/chat-test/stream")
 async def chat_test_stream(
     payload: WorkbenchChatTestRequest,
+    request: Request,
     session: AsyncSession = Depends(session_dep),
     redis: Redis | None = Depends(get_redis),
 ):
-    request_id = uuid.uuid4().hex
+    request_id = get_request_id(request)
     auth = await _auth_context_for_api_key(session, payload.api_key_id)
+    request.state.request_client_id = auth.client.id
+    request.state.request_api_key_id = auth.api_key.id
     chat_payload = ChatCompletionRequest.model_validate(
         {**payload.model_dump(exclude={"api_key_id"}), "stream": True}
     )
