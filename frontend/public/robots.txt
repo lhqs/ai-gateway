@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /dashboard
+Disallow: /workbench
+Disallow: /clients
+Disallow: /providers
+Disallow: /models
+Disallow: /pricing
+Disallow: /routes
+Disallow: /usage
+Disallow: /audit
+
+Sitemap: https://gateway.lhqs.ink/sitemap.xml

@@ -10,6 +10,7 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { RoutesPage } from "./pages/RoutesPage";
 import { UsagePage } from "./pages/UsagePage";
 import { LoginPage } from "./pages/LoginPage";
+import { LandingPage } from "./pages/LandingPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
 import { api, apiBase, authHeaders, clearAuth, readAuthUser, saveAuth } from "./lib/api";
 import { isKnownPath, tabFromPath, tabPaths } from "./lib/routes";
@@ -17,6 +18,7 @@ import type { AuthUser, Tab, TokenResponse } from "./types/gateway";
 
 export function App() {
   const [tab, setTab] = useState<Tab>(() => tabFromPath(window.location.pathname));
+  const [pathname, setPathname] = useState(window.location.pathname);
   const [accessToken, setAccessToken] = useState(localStorage.getItem("accessToken") || "");
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => readAuthUser());
   const [authenticated, setAuthenticated] = useState(Boolean(localStorage.getItem("accessToken")));
@@ -25,6 +27,7 @@ export function App() {
 
   useEffect(() => {
     function syncTabWithLocation() {
+      setPathname(window.location.pathname);
       setTab(tabFromPath(window.location.pathname));
     }
 
@@ -34,11 +37,23 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!isKnownPath(window.location.pathname) || window.location.pathname === "/") {
-      window.history.replaceState(null, "", tabPaths.dashboard);
-      setTab("dashboard");
+    if (!isKnownPath(window.location.pathname) && window.location.pathname !== "/login") {
+      window.history.replaceState(null, "", "/");
+      setPathname("/");
     }
   }, []);
+
+  useEffect(() => {
+    const isProtectedPath = pathname !== "/" && isKnownPath(pathname);
+    if (!authenticated && isProtectedPath) {
+      window.history.replaceState(null, "", "/login");
+      setPathname("/login");
+    } else if (authenticated && pathname === "/login") {
+      window.history.replaceState(null, "", tabPaths.dashboard);
+      setPathname(tabPaths.dashboard);
+      setTab("dashboard");
+    }
+  }, [authenticated, pathname]);
 
   useEffect(() => {
     function handleAuthUpdated(event: Event) {
@@ -84,12 +99,16 @@ export function App() {
     setCurrentUser(payload.user);
     setAuthenticated(true);
     setNotice(`Connected to ${apiBase()}`);
+    window.history.replaceState(null, "", tabPaths.dashboard);
+    setPathname(tabPaths.dashboard);
+    setTab("dashboard");
   }
 
   function navigate(path: string) {
     if (window.location.pathname !== path) {
       window.history.pushState(null, "", path);
     }
+    setPathname(path);
     setTab(tabFromPath(path));
   }
 
@@ -113,6 +132,12 @@ export function App() {
     }
     clearAuth();
     setNotice("");
+    window.history.replaceState(null, "", "/login");
+    setPathname("/login");
+  }
+
+  if (pathname === "/") {
+    return <LandingPage />;
   }
 
   if (!authenticated) {

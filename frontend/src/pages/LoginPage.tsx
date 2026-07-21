@@ -1,5 +1,5 @@
 import { ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export function LoginPage({
   onLogin
@@ -10,6 +10,10 @@ export function LoginPage({
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    document.title = "登录 | LHQS AI Gateway";
+  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
